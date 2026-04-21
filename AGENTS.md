@@ -5,7 +5,7 @@
 Wyoming Voice Bridge is a lightweight, open-source desktop application for Linux that brings
 together local speech recognition and speech synthesis into a single, easy-to-use tool. Built
 with privacy in mind, it communicates exclusively with locally hosted AI services — nothing is
-sent to the cloud. The application is written in Go and designed to run natively on modern Linux
+sent to the cloud. The application is written in Python and designed to run natively on modern Linux
 desktops using the Wayland display protocol.
 
 ---
@@ -30,12 +30,12 @@ This makes the tool especially appealing to:
 
 When the user holds down a designated button, the application begins listening through their
 chosen microphone. That audio is streamed in real time to a local Speech-to-Text (STT) service,
-which transcribes what the user said into text.
+which returns transcribed text back as a stream — meaning the application receives results
+continuously as the user speaks, rather than waiting until they let go of the button.
 
-That text is then forwarded to a local Text-to-Speech (TTS) service, which generates a spoken
-audio response. The application receives that audio and plays it back through whichever speakers
-or audio devices the user has selected — with support for routing to multiple outputs
-simultaneously if desired.
+That text is then forwarded to a local Text-to-Speech (TTS) service, which streams generated
+audio back to the application in real time. Playback can begin as soon as the first audio
+arrives, without waiting for the entire response to be produced first.
 
 The entire interaction — from holding the button to hearing the response — is handled locally
 and privately.
@@ -44,22 +44,27 @@ and privately.
 
 ## Key Features
 
-- **Push-to-talk input** — Audio capture only happens while the button is held, keeping
-  interactions intentional and preventing accidental recording.
+- **Push-to-talk input** — Audio capture only happens while the designated key is held, keeping
+  interactions intentional and preventing accidental recording. The chosen key will be registered
+  as a global shortcut with the desktop environment via the XDG Global Shortcuts portal — the
+  modern standard for system-wide key bindings on Wayland — so the push-to-talk key works even
+  when the application window is not in focus.
 
-- **Local STT integration** — Connects to any Wyoming-compatible speech-to-text service running
-  on the user's network or machine.
+- **Local STT integration** — Streams microphone audio in real time to any Wyoming-compatible
+  speech-to-text service, receiving transcribed text back as it becomes available rather than
+  waiting for the full recording to complete.
 
 - **Local TTS integration** — Connects to any Wyoming-compatible text-to-speech service and
-  streams audio responses back to the user in real time.
+  streams the generated audio response back in real time, allowing playback to begin before the
+  full response has finished being produced.
 
 - **Flexible audio routing** — Uses PipeWire, the modern Linux audio system, to direct
   microphone input from a chosen device and send audio output to one or more selected playback
   devices.
 
-- **Simple configuration UI** — A clean, minimal desktop interface (built with the Gio UI
-  library) lets users configure all connection settings and audio devices in one place without
-  editing any configuration files.
+- **Simple configuration UI** — A clean, minimal desktop interface built with Qt, a mature and
+  widely supported GUI framework with first-class Wayland support, lets users configure all
+  connection settings and audio devices in one place without editing any configuration files.
 
 - **Wayland-native** — Designed from the ground up to run on modern Linux desktops using the
   Wayland display protocol, without requiring legacy compatibility layers.
@@ -111,7 +116,8 @@ with a wide range of existing self-hosted setups.
 
 This document represents the initial planning draft for Wyoming Voice Bridge. Development is in
 the early stages, with the core architecture and feature set now defined. The next steps involve
-establishing the foundational codebase, implementing Wyoming protocol communication, wiring up
-PipeWire audio, and building out the configuration interface.
+establishing the foundational Python codebase — managed with UV, a modern and fast Python
+package manager — implementing Wyoming protocol communication, wiring up PipeWire audio, and
+building out the Qt configuration interface.
 
 Contributions, feedback, and ideas are welcome as the project takes shape.
