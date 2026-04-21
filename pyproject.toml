@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wyomingchat"
+version = "0.1.0"
+description = "Desktop bridge for local Wyoming STT and TTS services (Linux/PipeWire and Windows)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Wyoming Voice Bridge Contributors" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+  "PySide6>=6.10.0",
+  # pysilero-vad >= 3.4.0 ships prebuilt abi3 wheels for Linux, macOS, and
+  # Windows (win32/win_amd64), which the Windows EXE packaging relies on.
+  # Earlier versions are sdist-only and do not build with scikit-build-core >= 0.8.
+  "pysilero-vad>=3.4.0",
+  "setuptools>=80.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+]
+packaging = [
+  "pyinstaller>=6.10.0",
+]
+
+[project.scripts]
+wyoming-voice-bridge = "wyomingchat.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wyomingchat"]
+shared-data = { "resources/io.github.justinlime.WyomingVoiceBridge.desktop" = "share/applications/io.github.justinlime.WyomingVoiceBridge.desktop" }
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/README.md",
+  "/pyproject.toml",
+  "/resources",
+  "/src/wyomingchat",
+  "/packaging",
+  "/tests",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+]
