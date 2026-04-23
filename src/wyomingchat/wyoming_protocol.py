@@ -65,7 +65,11 @@ def encode_event(event: WyomingEvent) -> bytes:
 def decode_event(reader: BinaryIO) -> WyomingEvent | None:
     """Read and decode one Wyoming event from a binary stream."""
 
-    json_line = reader.readline()
+    try:
+        json_line = reader.readline()
+    except ValueError as exc:
+        raise EOFError("The binary stream became unreadable while decoding a Wyoming event") from exc
+
     if not json_line:
         return None
 
@@ -93,7 +97,10 @@ def read_exactly(reader: BinaryIO, length: int) -> bytes:
 
     buffer = bytearray()
     while len(buffer) < length:
-        chunk = reader.read(length - len(buffer))
+        try:
+            chunk = reader.read(length - len(buffer))
+        except ValueError as exc:
+            raise EOFError("The binary stream became unreadable while reading a Wyoming payload") from exc
         if not chunk:
             raise EOFError(f"Expected {length} bytes but the stream ended early")
         buffer.extend(chunk)

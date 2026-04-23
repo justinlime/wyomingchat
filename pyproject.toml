@@ -25,7 +25,8 @@ classifiers = [
 ]
 dependencies = [
   "PySide6>=6.10.0",
-  "dbus-next>=0.2.3",
+  "pysilero-vad>=3.3.0",
+  "setuptools>=80.0.0",
 ]
 
 [project.optional-dependencies]

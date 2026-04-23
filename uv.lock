@@ -12,15 +12,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dbus-next"
-version = "0.2.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ce/45/6a40fbe886d60a8c26f480e7d12535502b5ba123814b3b9a0b002ebca198/dbus_next-0.2.3.tar.gz", hash = "sha256:f4eae26909332ada528c0a3549dda8d4f088f9b365153952a408e28023a626a5", size = 71112, upload-time = "2021-07-25T22:11:28.398Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/fc/c0a3f4c4eaa5a22fbef91713474666e13d0ea2a69c84532579490a9f2cc8/dbus_next-0.2.3-py3-none-any.whl", hash = "sha256:58948f9aff9db08316734c0be2a120f6dc502124d9642f55e90ac82ffb16a18b", size = 57885, upload-time = "2021-07-25T22:11:25.466Z" },
-]
-
-[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -105,6 +96,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pysilero-vad"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/f5/9be84ec8bcbe77d798a86a5fde518d257bd997a2465c8a4704241094a495/pysilero_vad-3.3.0.tar.gz", hash = "sha256:b9f2a423a137e9bc6d5a0e638ca76e1f750baa3a1eed60153995d1c280b1316f", size = 2400143, upload-time = "2026-02-09T22:16:16.775Z" }
+
+[[package]]
 name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -118,6 +115,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7d/0d/549bd94f1a0a402dc8cf64563a117c0f3765662e2e668477624baeec44d5/pytest-9.0.3.tar.gz", hash = "sha256:b86ada508af81d19edeb213c681b1d48246c1a91d304c6c81a427674c17eb91c", size = 1572165, upload-time = "2026-04-07T17:16:18.027Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/24/a372aaf5c9b7208e7112038812994107bc65a84cd00e0354a88c2c77a617/pytest-9.0.3-py3-none-any.whl", hash = "sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9", size = 375249, upload-time = "2026-04-07T17:16:16.13Z" },
+]
+
+[[package]]
+name = "setuptools"
+version = "82.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
 ]
 
 [[package]]
@@ -137,8 +143,9 @@ name = "wyomingchat"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "dbus-next" },
     { name = "pyside6" },
+    { name = "pysilero-vad" },
+    { name = "setuptools" },
 ]
 
 [package.optional-dependencies]
@@ -153,9 +160,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dbus-next", specifier = ">=0.2.3" },
     { name = "pyside6", specifier = ">=6.10.0" },
+    { name = "pysilero-vad", specifier = ">=3.3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
+    { name = "setuptools", specifier = ">=80.0.0" },
 ]
 provides-extras = ["dev"]
 

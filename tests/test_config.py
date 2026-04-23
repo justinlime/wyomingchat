@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wyomingchat.config import AppConfig, AudioSelection, ServiceEndpoint, ShortcutConfig
+from wyomingchat.config import (
+    AppConfig,
+    AudioSelection,
+    ServiceEndpoint,
+    TtsVoiceConfig,
+    VirtualMicrophoneConfig,
+    build_tts_voice_display_label,
+)
 from wyomingchat.storage import JsonConfigStore
 
 
-# Usage: verify that AppConfig serialization preserves nested endpoint, audio, and shortcut values.
+# Usage: verify that AppConfig serialization preserves nested endpoint, audio, and virtual microphone values.
 # Parameters: none.
 # Return: None.
 def test_app_config_round_trip_serialization() -> None:
@@ -17,18 +24,36 @@ def test_app_config_round_trip_serialization() -> None:
     original = AppConfig(
         stt_endpoint=ServiceEndpoint(host="stt.local", port=12000),
         tts_endpoint=ServiceEndpoint(host="tts.local", port=13000),
+        tts_voice=TtsVoiceConfig(name="kokoro", language="en", speaker="bella"),
+        mic_gate_threshold_percent=12,
         audio=AudioSelection(input_device_id="mic-1", output_device_ids=["spk-1", "spk-2"]),
-        shortcut=ShortcutConfig(
-            preferred_trigger="Super+space",
-            description="Talk now",
-            trigger_description="Meta+Space",
+        virtual_microphone=VirtualMicrophoneConfig(
             enabled=True,
+            node_name="wyoming_mic",
+            description="Wyoming Voice Bridge Mic",
         ),
         last_transcript="hello world",
     )
 
     restored = AppConfig.from_dict(original.to_dict())
     assert restored == original
+
+
+# Usage: verify that the TTS voice label helper prefers speaker-only labels when a single voice exposes multiple speakers.
+# Parameters: none.
+# Return: None.
+def test_build_tts_voice_display_label_prefers_speaker_name_for_multi_speaker_voice() -> None:
+    """Ensure multi-speaker voice options are shown using readable speaker labels."""
+
+    available_voices = [
+        TtsVoiceConfig(name="fatterqwen", speaker="Hank"),
+        TtsVoiceConfig(name="fatterqwen", speaker="Victor"),
+        TtsVoiceConfig(name="fatterqwen", speaker="Spy"),
+    ]
+
+    labels = [build_tts_voice_display_label(voice, available_voices) for voice in available_voices]
+
+    assert labels == ["Hank", "Victor", "Spy"]
 
 
 # Usage: verify that the JSON config store falls back to defaults when no config file exists.
@@ -55,8 +80,14 @@ def test_json_config_store_persists_and_reloads_configuration(tmp_path: Path) ->
     original = AppConfig(
         stt_endpoint=ServiceEndpoint(host="10.0.0.5", port=10300),
         tts_endpoint=ServiceEndpoint(host="10.0.0.6", port=10200),
+        tts_voice=TtsVoiceConfig(name="piper", language="en-US", speaker="amy"),
+        mic_gate_threshold_percent=9,
         audio=AudioSelection(input_device_id="default-mic", output_device_ids=["default-speaker"]),
-        shortcut=ShortcutConfig(preferred_trigger="Ctrl+Alt+space", description="Push to talk"),
+        virtual_microphone=VirtualMicrophoneConfig(
+            enabled=True,
+            node_name="voice_bridge_sink",
+            description="Voice Bridge Sink",
+        ),
         last_transcript="saved transcript",
     )
 
@@ -75,7 +106,7 @@ def test_json_config_store_falls_back_on_invalid_field_types(tmp_path: Path) -> 
 
     config_path = tmp_path / "broken.json"
     config_path.write_text(
-        '{"stt_endpoint": {"host": "", "port": "99999"}, "tts_endpoint": {"port": "abc"}, "shortcut": {"enabled": "false"}}',
+        '{"stt_endpoint": {"host": "", "port": "99999"}, "tts_endpoint": {"port": "abc"}, "tts_voice": {"name": 123, "speaker": null}, "mic_gate_threshold_percent": "999", "virtual_microphone": {"enabled": "true", "node_name": ""}}',
         encoding="utf-8",
     )
     store = JsonConfigStore(config_path=config_path)
@@ -85,4 +116,8 @@ def test_json_config_store_falls_back_on_invalid_field_types(tmp_path: Path) -> 
     assert loaded.stt_endpoint.host == "127.0.0.1"
     assert loaded.stt_endpoint.port == 10300
     assert loaded.tts_endpoint.port == 10200
-    assert loaded.shortcut.enabled is False
+    assert loaded.tts_voice.name == "123"
+    assert loaded.tts_voice.speaker == ""
+    assert loaded.mic_gate_threshold_percent == 100
+    assert loaded.virtual_microphone.enabled is True
+    assert loaded.virtual_microphone.node_name == "wyoming_voice_bridge_mic"

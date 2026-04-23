@@ -16,24 +16,33 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSlider,
     QSpinBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from .audio import AudioDeviceCatalog, AudioDeviceDescriptor
-from .config import AppConfig, AudioSelection, ServiceEndpoint, ShortcutConfig
-from .constants import APP_NAME, DEFAULT_SHORTCUT_DESCRIPTION
+from .audio import AudioDeviceCatalog
+from .config import (
+    AppConfig,
+    AudioSelection,
+    ServiceEndpoint,
+    TtsVoiceConfig,
+    VirtualMicrophoneConfig,
+    build_tts_voice_display_label,
+)
+from .constants import APP_NAME
 from .controller import BridgeController
 
 
 class MainWindow(QMainWindow):
-    """Provide the desktop configuration and control surface for the voice bridge."""
+    """Provide the desktop configuration and status surface for the voice bridge."""
 
     # Usage: construct the main application window and wire it to the controller and audio catalog.
-    # Parameters: controller - the orchestration layer that performs save, shortcut, STT, and TTS actions; catalog - the audio device catalog used to populate device selectors.
+    # Parameters: controller - the orchestration layer that performs save, monitoring, STT, TTS, and PipeWire actions; catalog - the audio device catalog used to populate device selectors.
     # Return: None.
     def __init__(self, controller: BridgeController, catalog: AudioDeviceCatalog) -> None:
         """Initialize the main window and all of its widgets."""
@@ -42,6 +51,7 @@ class MainWindow(QMainWindow):
         self._controller = controller
         self._catalog = catalog
         self._loaded_config = AppConfig()
+        self._available_tts_voices: list[TtsVoiceConfig] = []
         self.setWindowTitle(APP_NAME)
         self.resize(980, 760)
         self._build_window()
@@ -59,16 +69,17 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         self._state_label = QLabel("State: idle")
-        self._shortcut_status_label = QLabel("Shortcut: not registered")
-        self._portal_status_label = QLabel("Portal listener: inactive")
+        self._monitoring_status_label = QLabel("Open microphone: inactive")
+        self._virtual_mic_status_label = QLabel("Virtual microphone: not configured")
         layout.addWidget(self._state_label)
-        layout.addWidget(self._shortcut_status_label)
-        layout.addWidget(self._portal_status_label)
+        layout.addWidget(self._monitoring_status_label)
+        layout.addWidget(self._virtual_mic_status_label)
 
         layout.addWidget(self._build_service_group())
         layout.addWidget(self._build_audio_group())
-        layout.addWidget(self._build_shortcut_group())
-        layout.addWidget(self._build_manual_control_group())
+        layout.addWidget(self._build_microphone_gate_group())
+        layout.addWidget(self._build_virtual_microphone_group())
+        layout.addWidget(self._build_actions_group())
         layout.addWidget(self._build_status_group(), stretch=1)
 
         self._status_bar = QStatusBar(self)
@@ -90,14 +101,30 @@ class MainWindow(QMainWindow):
         self._tts_host_edit = QLineEdit()
         self._tts_port_spin = QSpinBox()
         self._tts_port_spin.setRange(1, 65535)
+        self._tts_voice_combo = QComboBox()
+        self._refresh_tts_voices_button = QPushButton("Query Voices")
+        self._refresh_tts_voices_button.clicked.connect(self._handle_refresh_tts_voices_clicked)
+
+        tts_voice_row = QWidget()
+        tts_voice_layout = QHBoxLayout(tts_voice_row)
+        tts_voice_layout.setContentsMargins(0, 0, 0, 0)
+        tts_voice_layout.addWidget(self._tts_voice_combo, stretch=1)
+        tts_voice_layout.addWidget(self._refresh_tts_voices_button)
+
+        helper = QLabel(
+            "Use Query Voices to send a Wyoming describe/info request to the configured TTS server and pick a specific voice when the server advertises one."
+        )
+        helper.setWordWrap(True)
 
         layout.addRow("STT host", self._stt_host_edit)
         layout.addRow("STT port", self._stt_port_spin)
         layout.addRow("TTS host", self._tts_host_edit)
         layout.addRow("TTS port", self._tts_port_spin)
+        layout.addRow("TTS voice", tts_voice_row)
+        layout.addRow(helper)
         return group
 
-    # Usage: build the UI section containing microphone and speaker selectors.
+    # Usage: build the UI section containing microphone and playback selectors.
     # Parameters: none.
     # Return: a QGroupBox containing the audio device widgets.
     def _build_audio_group(self) -> QGroupBox:
@@ -108,61 +135,115 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
         self._input_combo = QComboBox()
-        form.addRow("Microphone", self._input_combo)
+        form.addRow("Open microphone input", self._input_combo)
         layout.addLayout(form)
 
+        layout.addWidget(QLabel("Playback outputs"))
         self._output_list = QListWidget()
         self._output_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        layout.addWidget(QLabel("Playback outputs"))
         layout.addWidget(self._output_list)
 
-        button_row = QHBoxLayout()
-        self._refresh_devices_button = QPushButton("Refresh Devices")
-        self._refresh_devices_button.clicked.connect(self._handle_refresh_clicked)
-        button_row.addWidget(self._refresh_devices_button)
-        button_row.addStretch(1)
-        layout.addLayout(button_row)
+        helper = QLabel(
+            "Tip: choose only your real speaker or headphone outputs here. When the managed PipeWire virtual microphone is enabled and available, the app now routes TTS into its loopback sink automatically."
+        )
+        helper.setWordWrap(True)
+        layout.addWidget(helper)
         return group
 
-    # Usage: build the UI section containing global shortcut configuration widgets.
+    # Usage: build the UI section containing PipeWire virtual microphone settings and actions.
     # Parameters: none.
-    # Return: a QGroupBox containing shortcut fields and actions.
-    def _build_shortcut_group(self) -> QGroupBox:
-        """Create the global shortcut configuration section."""
+    # Return: a QGroupBox containing virtual microphone fields and the install action.
+    # Usage: build the UI section containing the adjustable microphone noise gate and live input meter.
+    # Parameters: none.
+    # Return: a QGroupBox containing the gate threshold slider and real-time level widgets.
+    def _build_microphone_gate_group(self) -> QGroupBox:
+        """Create the microphone gate controls and live input-meter section."""
 
-        group = QGroupBox("Push-to-Talk Shortcut")
+        group = QGroupBox("Microphone Gate")
         layout = QFormLayout(group)
 
-        self._shortcut_trigger_edit = QLineEdit()
-        self._shortcut_description_edit = QLineEdit(DEFAULT_SHORTCUT_DESCRIPTION)
-        self._shortcut_enabled_checkbox = QCheckBox("Enable global push-to-talk shortcut")
-        self._shortcut_enabled_checkbox.setChecked(True)
-        self._register_shortcut_button = QPushButton("Register Shortcut")
-        self._register_shortcut_button.clicked.connect(self._handle_register_shortcut_clicked)
+        self._mic_gate_slider = QSlider(Qt.Orientation.Horizontal)
+        self._mic_gate_slider.setRange(0, 100)
+        self._mic_gate_slider.setSingleStep(1)
+        self._mic_gate_slider.valueChanged.connect(self._handle_mic_gate_slider_changed)
+        self._mic_gate_value_label = QLabel("0%")
 
-        layout.addRow("Preferred trigger", self._shortcut_trigger_edit)
-        layout.addRow("Description", self._shortcut_description_edit)
-        layout.addRow("Enabled", self._shortcut_enabled_checkbox)
-        layout.addRow("Portal registration", self._register_shortcut_button)
+        slider_row = QWidget()
+        slider_layout = QHBoxLayout(slider_row)
+        slider_layout.setContentsMargins(0, 0, 0, 0)
+        slider_layout.addWidget(self._mic_gate_slider, stretch=1)
+        slider_layout.addWidget(self._mic_gate_value_label)
+
+        self._mic_level_bar = QProgressBar()
+        self._mic_level_bar.setRange(0, 100)
+        self._mic_level_bar.setValue(0)
+        self._mic_level_bar.setFormat("%p%")
+        self._mic_level_value_label = QLabel("0%")
+
+        meter_row = QWidget()
+        meter_layout = QHBoxLayout(meter_row)
+        meter_layout.setContentsMargins(0, 0, 0, 0)
+        meter_layout.addWidget(self._mic_level_bar, stretch=1)
+        meter_layout.addWidget(self._mic_level_value_label)
+
+        self._mic_gate_state_label = QLabel("Gate closed")
+        helper = QLabel(
+            "Increase the gate if quiet background sounds or button taps keep triggering the app. "
+            "Watch the live mic level while the room is quiet, then set the gate slightly above that background level."
+        )
+        helper.setWordWrap(True)
+
+        layout.addRow("Start speech above", slider_row)
+        layout.addRow("Live mic level", meter_row)
+        layout.addRow("Gate state", self._mic_gate_state_label)
+        layout.addRow(helper)
         return group
 
-    # Usage: build the section that exposes save controls and a manual push-to-talk fallback button.
+    # Usage: build the UI section containing PipeWire virtual microphone settings and actions.
     # Parameters: none.
-    # Return: a QGroupBox containing save and manual control actions.
-    def _build_manual_control_group(self) -> QGroupBox:
-        """Create the action buttons for saving config and manual push-to-talk."""
+    # Return: a QGroupBox containing virtual microphone fields and the install action.
+    def _build_virtual_microphone_group(self) -> QGroupBox:
+        """Create the PipeWire virtual microphone configuration section."""
+
+        group = QGroupBox("PipeWire Virtual Microphone")
+        layout = QFormLayout(group)
+
+        self._virtual_mic_enabled_checkbox = QCheckBox("Manage a PipeWire virtual microphone sink")
+        self._virtual_mic_node_name_edit = QLineEdit()
+        self._virtual_mic_description_edit = QLineEdit()
+        self._install_virtual_mic_button = QPushButton("Write PipeWire Config")
+        self._install_virtual_mic_button.clicked.connect(self._handle_install_virtual_mic_clicked)
+
+        helper = QLabel(
+            "This writes a PipeWire loopback configuration that creates a playback sink and a linked microphone-like source. "
+            "The virtual microphone carries only the app's synthesized TTS output, not the user's live microphone. "
+            "After writing the config, restart pipewire, pipewire-pulse, and wireplumber so the app can route TTS into the managed sink automatically."
+        )
+        helper.setWordWrap(True)
+
+        layout.addRow("Enabled", self._virtual_mic_enabled_checkbox)
+        layout.addRow("PipeWire node name", self._virtual_mic_node_name_edit)
+        layout.addRow("Description", self._virtual_mic_description_edit)
+        layout.addRow("Install/update", self._install_virtual_mic_button)
+        layout.addRow(helper)
+        return group
+
+    # Usage: build the section that exposes save, refresh, and PipeWire management actions.
+    # Parameters: none.
+    # Return: a QGroupBox containing action buttons.
+    def _build_actions_group(self) -> QGroupBox:
+        """Create the action buttons for saving configuration and refreshing devices."""
 
         group = QGroupBox("Actions")
         layout = QHBoxLayout(group)
 
         self._save_button = QPushButton("Save Configuration")
         self._save_button.clicked.connect(self._handle_save_clicked)
-        self._manual_ptt_button = QPushButton("Hold to Talk")
-        self._manual_ptt_button.pressed.connect(self._handle_manual_ptt_pressed)
-        self._manual_ptt_button.released.connect(self._handle_manual_ptt_released)
+        self._refresh_devices_button = QPushButton("Refresh Devices")
+        self._refresh_devices_button.clicked.connect(self._handle_refresh_clicked)
 
         layout.addWidget(self._save_button)
-        layout.addWidget(self._manual_ptt_button)
+        layout.addWidget(self._refresh_devices_button)
         layout.addStretch(1)
         return group
 
@@ -197,15 +278,17 @@ class MainWindow(QMainWindow):
         """Connect controller signals to the UI update handlers."""
 
         self._controller.configuration_loaded.connect(self.load_from_config)
+        self._controller.tts_voices_changed.connect(self._handle_tts_voices_changed)
         self._controller.devices_changed.connect(self._refresh_device_widgets)
         self._controller.state_changed.connect(self._handle_state_changed)
         self._controller.status_changed.connect(self._handle_status_changed)
         self._controller.partial_transcript_changed.connect(self._handle_partial_transcript_changed)
         self._controller.final_transcript_changed.connect(self._handle_final_transcript_changed)
         self._controller.error_changed.connect(self._handle_error_changed)
-        self._controller.shortcut_registered.connect(self._handle_shortcut_registered)
-        self._controller.shortcut_error.connect(self._handle_shortcut_error)
-        self._controller.shortcut_availability_changed.connect(self._handle_shortcut_availability_changed)
+        self._controller.monitoring_changed.connect(self._handle_monitoring_changed)
+        self._controller.virtual_microphone_configured.connect(self._handle_virtual_microphone_configured)
+        self._controller.microphone_level_changed.connect(self._handle_microphone_level_changed)
+        self._controller.microphone_gate_changed.connect(self._handle_microphone_gate_changed)
 
     # Usage: populate the entire form with configuration values loaded from disk.
     # Parameters: config - the AppConfig that should be reflected in the UI.
@@ -218,11 +301,15 @@ class MainWindow(QMainWindow):
         self._stt_port_spin.setValue(config.stt_endpoint.port)
         self._tts_host_edit.setText(config.tts_endpoint.host)
         self._tts_port_spin.setValue(config.tts_endpoint.port)
-        self._shortcut_trigger_edit.setText(config.shortcut.preferred_trigger)
-        self._shortcut_description_edit.setText(config.shortcut.description)
-        self._shortcut_enabled_checkbox.setChecked(config.shortcut.enabled)
-        self._shortcut_status_label.setText(
-            f"Shortcut: {config.shortcut.trigger_description or 'not registered'}"
+        self._refresh_tts_voice_combo(config.tts_voice)
+        self._set_mic_gate_threshold(config.mic_gate_threshold_percent)
+        self._virtual_mic_enabled_checkbox.setChecked(config.virtual_microphone.enabled)
+        self._virtual_mic_node_name_edit.setText(config.virtual_microphone.node_name)
+        self._virtual_mic_description_edit.setText(config.virtual_microphone.description)
+        self._virtual_mic_status_label.setText(
+            "Virtual microphone: enabled in configuration"
+            if config.virtual_microphone.enabled
+            else "Virtual microphone: not configured"
         )
         self._final_transcript_edit.setPlainText(config.last_transcript)
         self._refresh_device_widgets()
@@ -235,6 +322,58 @@ class MainWindow(QMainWindow):
 
         self._populate_input_devices(self._loaded_config.audio.input_device_id)
         self._populate_output_devices(self._loaded_config.audio.output_device_ids)
+
+    # Usage: rebuild the TTS voice combo box using the latest discovered server voices while preserving the current or saved selection.
+    # Parameters: selected_voice - the voice that should remain selected when possible.
+    # Return: None.
+    def _refresh_tts_voice_combo(self, selected_voice: TtsVoiceConfig) -> None:
+        """Populate the TTS voice selector from discovered voices and the saved configuration."""
+
+        target_voice = selected_voice if isinstance(selected_voice, TtsVoiceConfig) else TtsVoiceConfig()
+        self._tts_voice_combo.blockSignals(True)
+        self._tts_voice_combo.clear()
+        self._tts_voice_combo.addItem("Use server default voice", None)
+
+        available_voices = list(self._available_tts_voices)
+        if target_voice.is_configured() and target_voice not in available_voices:
+            available_voices.append(target_voice)
+
+        for voice in available_voices:
+            self._tts_voice_combo.addItem(
+                build_tts_voice_display_label(voice, available_voices),
+                voice.to_dict(),
+            )
+
+        if target_voice.is_configured():
+            for index in range(self._tts_voice_combo.count()):
+                item_payload = self._tts_voice_combo.itemData(index)
+                if TtsVoiceConfig.from_dict(item_payload) == target_voice:
+                    self._tts_voice_combo.setCurrentIndex(index)
+                    break
+        else:
+            self._tts_voice_combo.setCurrentIndex(0)
+
+        self._tts_voice_combo.blockSignals(False)
+
+    # Usage: convert the currently selected TTS voice combo-box value back into a configuration object.
+    # Parameters: none.
+    # Return: a TtsVoiceConfig describing the current voice selection, or an empty selection when using the server default voice.
+    def _collect_selected_tts_voice(self) -> TtsVoiceConfig:
+        """Return the currently selected TTS voice choice from the combo box."""
+
+        return TtsVoiceConfig.from_dict(self._tts_voice_combo.currentData())
+
+    # Usage: set the visible mic-gate slider and label to a specific threshold percentage without triggering duplicate UI updates.
+    # Parameters: threshold_percent - the 0-100 gate threshold that should be displayed.
+    # Return: None.
+    def _set_mic_gate_threshold(self, threshold_percent: int) -> None:
+        """Display the supplied microphone gate threshold percentage in the slider row."""
+
+        normalized_threshold = max(0, min(100, int(threshold_percent)))
+        self._mic_gate_slider.blockSignals(True)
+        self._mic_gate_slider.setValue(normalized_threshold)
+        self._mic_gate_slider.blockSignals(False)
+        self._mic_gate_value_label.setText(f"{normalized_threshold}%")
 
     # Usage: fill the microphone combo box and restore the selected device when possible.
     # Parameters: selected_id - the previously selected microphone id, or None to select the default device.
@@ -258,6 +397,7 @@ class MainWindow(QMainWindow):
             matched_index = self._input_combo.findData(current_selected_id)
             if matched_index >= 0:
                 self._input_combo.setCurrentIndex(matched_index)
+
         self._input_combo.blockSignals(False)
 
     # Usage: fill the playback output list and restore checked items for selected speakers.
@@ -296,7 +436,7 @@ class MainWindow(QMainWindow):
                 output_ids.append(str(item.data(Qt.ItemDataRole.UserRole)))
         return output_ids
 
-    # Usage: collect a fresh AppConfig from the current form values before saving or registering shortcuts.
+    # Usage: collect a fresh AppConfig from the current form values before saving or managing PipeWire config.
     # Parameters: none.
     # Return: an AppConfig built from the visible widget state.
     def collect_config_from_form(self) -> AppConfig:
@@ -311,15 +451,16 @@ class MainWindow(QMainWindow):
                 host=self._tts_host_edit.text().strip() or "127.0.0.1",
                 port=self._tts_port_spin.value(),
             ),
+            tts_voice=self._collect_selected_tts_voice(),
+            mic_gate_threshold_percent=self._mic_gate_slider.value(),
             audio=AudioSelection(
                 input_device_id=self._input_combo.currentData(),
                 output_device_ids=self._collect_output_device_ids(),
             ),
-            shortcut=ShortcutConfig(
-                preferred_trigger=self._shortcut_trigger_edit.text().strip(),
-                description=self._shortcut_description_edit.text().strip() or DEFAULT_SHORTCUT_DESCRIPTION,
-                trigger_description=self._loaded_config.shortcut.trigger_description,
-                enabled=self._shortcut_enabled_checkbox.isChecked(),
+            virtual_microphone=VirtualMicrophoneConfig(
+                enabled=self._virtual_mic_enabled_checkbox.isChecked(),
+                node_name=self._virtual_mic_node_name_edit.text().strip(),
+                description=self._virtual_mic_description_edit.text().strip(),
             ),
             last_transcript=self._final_transcript_edit.toPlainText(),
         )
@@ -343,32 +484,41 @@ class MainWindow(QMainWindow):
         self._loaded_config = self.collect_config_from_form()
         self._controller.refresh_devices()
 
-    # Usage: save the current form values and ask the controller to bind the configured portal shortcut.
+    # Usage: query the TTS endpoint from the current form values for advertised Wyoming voice options.
     # Parameters: none.
     # Return: None.
-    def _handle_register_shortcut_clicked(self) -> None:
-        """Persist the current form state and request portal shortcut registration."""
+    def _handle_refresh_tts_voices_clicked(self) -> None:
+        """Ask the controller to query the current TTS endpoint for selectable voices."""
 
+        self._loaded_config = self.collect_config_from_form()
+        self._controller.refresh_tts_voices(
+            ServiceEndpoint(
+                host=self._tts_host_edit.text().strip() or "127.0.0.1",
+                port=self._tts_port_spin.value(),
+            )
+        )
+
+    # Usage: update the visible percentage label as the user drags the microphone gate slider.
+    # Parameters: value - the newly selected 0-100 gate threshold percentage.
+    # Return: None.
+    def _handle_mic_gate_slider_changed(self, value: int) -> None:
+        """Reflect the latest microphone gate threshold value in the UI immediately."""
+
+        normalized_value = max(0, min(100, int(value)))
+        self._mic_gate_value_label.setText(f"{normalized_value}%")
+        self._controller.set_mic_gate_threshold_percent(normalized_value)
+
+    # Usage: persist the current form values and write the managed PipeWire virtual microphone config file.
+    # Parameters: none.
+    # Return: None.
+    def _handle_install_virtual_mic_clicked(self) -> None:
+        """Save the current form state and install the managed PipeWire virtual microphone config."""
+
+        self._virtual_mic_enabled_checkbox.setChecked(True)
         config = self.collect_config_from_form()
         self._loaded_config = config
         self._controller.save_configuration(config)
-        self._controller.register_shortcut_from_config()
-
-    # Usage: start a manual push-to-talk session when the user presses the fallback button.
-    # Parameters: none.
-    # Return: None.
-    def _handle_manual_ptt_pressed(self) -> None:
-        """Start listening when the manual hold-to-talk button is pressed."""
-
-        self._controller.start_listening()
-
-    # Usage: stop the manual push-to-talk session when the user releases the fallback button.
-    # Parameters: none.
-    # Return: None.
-    def _handle_manual_ptt_released(self) -> None:
-        """Stop listening when the manual hold-to-talk button is released."""
-
-        self._controller.stop_listening()
+        self._controller.install_virtual_microphone_from_config()
 
     # Usage: update the status bar when the controller emits a new human-readable status message.
     # Parameters: message - the status text that should be shown in the status bar.
@@ -378,6 +528,16 @@ class MainWindow(QMainWindow):
 
         self._status_bar.showMessage(message)
 
+    # Usage: accept a fresh list of discovered TTS voices from the controller and keep the current UI selection when possible.
+    # Parameters: voices - the selectable voice options returned by the Wyoming TTS server.
+    # Return: None.
+    def _handle_tts_voices_changed(self, voices: list[TtsVoiceConfig]) -> None:
+        """Refresh the TTS voice selector after the controller finishes a voice query."""
+
+        self._available_tts_voices = list(voices)
+        selected_voice = self._collect_selected_tts_voice()
+        self._refresh_tts_voice_combo(selected_voice)
+
     # Usage: update the state label when the controller transitions between high-level states.
     # Parameters: state - the new high-level state string.
     # Return: None.
@@ -385,6 +545,42 @@ class MainWindow(QMainWindow):
         """Reflect the controller's high-level state in the header area."""
 
         self._state_label.setText(f"State: {state}")
+
+    # Usage: display whether the open microphone monitor is currently active.
+    # Parameters: active - whether the controller's always-on microphone capture is running.
+    # Return: None.
+    def _handle_monitoring_changed(self, active: bool) -> None:
+        """Display the current always-on microphone monitoring state."""
+
+        self._monitoring_status_label.setText(
+            f"Open microphone: {'active' if active else 'inactive'}"
+        )
+
+    # Usage: update the live microphone level meter from the controller's latest normalized input level.
+    # Parameters: level_percent - the current microphone level expressed as an integer percentage from 0 to 100.
+    # Return: None.
+    def _handle_microphone_level_changed(self, level_percent: int) -> None:
+        """Refresh the live microphone level meter and percentage label."""
+
+        normalized_level = max(0, min(100, int(level_percent)))
+        self._mic_level_bar.setValue(normalized_level)
+        self._mic_level_value_label.setText(f"{normalized_level}%")
+
+    # Usage: update the text indicator that shows whether the current microphone level is above the configured gate threshold.
+    # Parameters: gate_open - True when the current mic level is at or above the gate threshold, otherwise False.
+    # Return: None.
+    def _handle_microphone_gate_changed(self, gate_open: bool) -> None:
+        """Display whether the live microphone level is currently opening the gate."""
+
+        self._mic_gate_state_label.setText("Gate open" if gate_open else "Gate closed")
+
+    # Usage: update the virtual microphone status label after the controller writes the PipeWire config file.
+    # Parameters: config_path - the filesystem path of the config file that was written.
+    # Return: None.
+    def _handle_virtual_microphone_configured(self, config_path: str) -> None:
+        """Display the location of the managed PipeWire virtual microphone config file."""
+
+        self._virtual_mic_status_label.setText(f"Virtual microphone: configured at {config_path}")
 
     # Usage: display streaming transcript updates in the partial transcript text box.
     # Parameters: text - the current transcript-chunk aggregation to display.
@@ -409,33 +605,6 @@ class MainWindow(QMainWindow):
         """Display the latest controller error message."""
 
         self._error_edit.setPlainText(text)
-
-    # Usage: update the shortcut status label after the portal confirms the bound trigger text.
-    # Parameters: trigger_description - the user-facing shortcut description returned by the portal backend.
-    # Return: None.
-    def _handle_shortcut_registered(self, trigger_description: str) -> None:
-        """Display the final bound shortcut text after successful registration."""
-
-        self._shortcut_status_label.setText(f"Shortcut: {trigger_description}")
-        self._loaded_config.shortcut.trigger_description = trigger_description
-
-    # Usage: append shortcut-specific portal failures to the error pane for visibility.
-    # Parameters: message - the shortcut registration error message.
-    # Return: None.
-    def _handle_shortcut_error(self, message: str) -> None:
-        """Display a shortcut registration failure in the error pane."""
-
-        self._error_edit.setPlainText(message)
-
-    # Usage: update the portal listener status label when the worker becomes active or inactive.
-    # Parameters: available - whether the global shortcut worker is actively connected and listening.
-    # Return: None.
-    def _handle_shortcut_availability_changed(self, available: bool) -> None:
-        """Display whether the global shortcut portal listener is currently active."""
-
-        self._portal_status_label.setText(
-            f"Portal listener: {'active' if available else 'inactive'}"
-        )
 
     # Usage: stop background workers cleanly when the main window is being closed.
     # Parameters: event - the Qt close event emitted by the window manager.

@@ -10,41 +10,16 @@ from functools import partial
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioFormat, QAudioSink, QAudioSource, QMediaDevices
 
-from .constants import (
-    DEFAULT_AUDIO_BUFFER_MS,
-    DEFAULT_AUDIO_CHANNELS,
-    DEFAULT_AUDIO_RATE,
-    DEFAULT_AUDIO_WIDTH,
+from .audio_types import (
+    AudioFormatSpec,
+    PCM_SAMPLE_FORMAT_FLOAT32,
+    PCM_SAMPLE_FORMAT_INT16,
+    PCM_SAMPLE_FORMAT_INT32,
+    PCM_SAMPLE_FORMAT_UINT8,
 )
+from .constants import DEFAULT_AUDIO_BUFFER_MS
 from .pipewire import PipeWireNode, build_node_lookup, list_audio_nodes
-
-
-@dataclass(slots=True)
-class AudioFormatSpec:
-    """Describe the raw PCM format used for capture and playback."""
-
-    rate: int = DEFAULT_AUDIO_RATE
-    width: int = DEFAULT_AUDIO_WIDTH
-    channels: int = DEFAULT_AUDIO_CHANNELS
-
-    # Usage: calculate the number of bytes in a single PCM frame for this format.
-    # Parameters: none.
-    # Return: the byte width of one audio frame.
-    def frame_bytes(self) -> int:
-        """Return the byte width of a single PCM frame."""
-
-        return self.width * self.channels
-
-    # Usage: estimate how long a number of raw PCM bytes will play for in milliseconds.
-    # Parameters: byte_count - the number of PCM bytes to convert into a duration estimate.
-    # Return: the estimated playback or capture duration in milliseconds.
-    def bytes_to_duration_ms(self, byte_count: int) -> float:
-        """Convert raw PCM byte counts into milliseconds for the current format."""
-
-        if byte_count <= 0 or self.rate <= 0 or self.frame_bytes() <= 0:
-            return 0.0
-
-        return (byte_count / (self.rate * self.frame_bytes())) * 1000.0
+from .routing import choose_available_output_device_ids
 
 
 @dataclass(slots=True)
@@ -56,6 +31,7 @@ class AudioDeviceDescriptor:
     direction: str
     is_default: bool
     pipewire_node_id: int | None = None
+    pipewire_node_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -91,17 +67,34 @@ def encode_device_id(device: QAudioDevice) -> str:
     return base64.urlsafe_b64encode(raw_bytes).decode("ascii")
 
 
-# Usage: map a PCM sample width in bytes to the closest Qt sample format enum.
-# Parameters: width - the number of bytes per sample.
+# Usage: map an AudioFormatSpec sample-format name into the matching Qt sample format enum.
+# Parameters: format_spec - the PCM format specification whose sample format should be converted.
 # Return: a QAudioFormat.SampleFormat value used to configure Qt audio objects.
-def sample_format_from_width(width: int) -> QAudioFormat.SampleFormat:
-    """Translate PCM sample widths into Qt sample format enum values."""
+def qt_sample_format_from_audio_format_spec(format_spec: AudioFormatSpec) -> QAudioFormat.SampleFormat:
+    """Translate an AudioFormatSpec sample format into the corresponding Qt enum value."""
 
-    if width == 1:
+    if format_spec.sample_format == PCM_SAMPLE_FORMAT_UINT8 or format_spec.width == 1:
         return QAudioFormat.SampleFormat.UInt8
-    if width == 4:
+    if format_spec.sample_format == PCM_SAMPLE_FORMAT_FLOAT32:
+        return QAudioFormat.SampleFormat.Float
+    if format_spec.sample_format == PCM_SAMPLE_FORMAT_INT32 or format_spec.width == 4:
         return QAudioFormat.SampleFormat.Int32
     return QAudioFormat.SampleFormat.Int16
+
+
+# Usage: map a Qt sample format enum back to the lightweight sample-format name stored in AudioFormatSpec.
+# Parameters: sample_format - the Qt sample format to inspect.
+# Return: the normalized sample-format name used throughout the Python codebase.
+def sample_format_name_from_qt_sample_format(sample_format: QAudioFormat.SampleFormat) -> str:
+    """Translate Qt sample formats into the normalized AudioFormatSpec sample-format strings."""
+
+    if sample_format == QAudioFormat.SampleFormat.UInt8:
+        return PCM_SAMPLE_FORMAT_UINT8
+    if sample_format == QAudioFormat.SampleFormat.Float:
+        return PCM_SAMPLE_FORMAT_FLOAT32
+    if sample_format == QAudioFormat.SampleFormat.Int32:
+        return PCM_SAMPLE_FORMAT_INT32
+    return PCM_SAMPLE_FORMAT_INT16
 
 
 # Usage: map a Qt sample format enum back to a PCM sample width in bytes.
@@ -126,13 +119,13 @@ def build_qaudio_format(format_spec: AudioFormatSpec) -> QAudioFormat:
     qt_format = QAudioFormat()
     qt_format.setSampleRate(format_spec.rate)
     qt_format.setChannelCount(format_spec.channels)
-    qt_format.setSampleFormat(sample_format_from_width(format_spec.width))
+    qt_format.setSampleFormat(qt_sample_format_from_audio_format_spec(format_spec))
     return qt_format
 
 
 # Usage: convert a QAudioFormat produced by Qt into the app's lightweight format spec.
 # Parameters: qt_format - the Qt format object to inspect.
-# Return: an AudioFormatSpec containing rate, width, and channel count.
+# Return: an AudioFormatSpec containing rate, width, channel count, and normalized sample-format name.
 def build_format_spec(qt_format: QAudioFormat) -> AudioFormatSpec:
     """Create an AudioFormatSpec from a QAudioFormat instance."""
 
@@ -140,6 +133,7 @@ def build_format_spec(qt_format: QAudioFormat) -> AudioFormatSpec:
         rate=qt_format.sampleRate(),
         width=width_from_sample_format(qt_format.sampleFormat()),
         channels=qt_format.channelCount(),
+        sample_format=sample_format_name_from_qt_sample_format(qt_format.sampleFormat()),
     )
 
 
@@ -187,6 +181,22 @@ class AudioDeviceCatalog(QObject):
 
         return [self._build_descriptor(device, direction="output") for device in QMediaDevices.audioOutputs()]
 
+    # Usage: resolve a PipeWire output node name back to the persisted Qt output-device id used by playback routing.
+    # Parameters: node_name - the PipeWire node.name value that should be located among current Qt output devices.
+    # Return: the persisted output device id when a matching Qt output can be identified, otherwise None.
+    def find_output_device_id_by_pipewire_node_name(self, node_name: str) -> str | None:
+        """Return the persisted output-device id that matches the supplied PipeWire node name."""
+
+        normalized_node_name = str(node_name).strip().casefold()
+        if not normalized_node_name:
+            return None
+
+        for descriptor in self.list_outputs():
+            if (descriptor.pipewire_node_name or "").casefold() == normalized_node_name:
+                return descriptor.id
+
+        return None
+
     # Usage: resolve a persisted microphone device id back to a concrete Qt audio device.
     # Parameters: device_id - the stored device id, or None to use the system default input.
     # Return: the matching QAudioDevice, or the default input if no match is found.
@@ -207,20 +217,20 @@ class AudioDeviceCatalog(QObject):
 
     # Usage: resolve persisted output ids back to concrete Qt audio devices for playback.
     # Parameters: device_ids - the stored output ids selected by the user.
-    # Return: a list of matching QAudioDevice instances, or the system default output if nothing matches.
+    # Return: a list of matching QAudioDevice instances, using the system default only when no explicit output ids were requested.
     def find_output_devices(self, device_ids: list[str]) -> list[QAudioDevice]:
-        """Return the requested playback devices or the default output when none match."""
+        """Return the requested playback devices without leaking to an unrelated default output when explicit targets are missing."""
 
         available_devices = list(QMediaDevices.audioOutputs())
-        matches = [device for device in available_devices if encode_device_id(device) in set(device_ids)]
-        if matches:
-            return matches
-
+        devices_by_id = {encode_device_id(device): device for device in available_devices}
         default_device = QMediaDevices.defaultAudioOutput()
-        if not default_device.isNull():
-            return [default_device]
-
-        return available_devices[:1]
+        default_output_id = encode_device_id(default_device) if not default_device.isNull() else None
+        selected_output_ids = choose_available_output_device_ids(
+            device_ids,
+            list(devices_by_id),
+            default_output_id,
+        )
+        return [devices_by_id[output_id] for output_id in selected_output_ids if output_id in devices_by_id]
 
     # Usage: refresh device metadata after Qt reports a change and notify the UI.
     # Parameters: none.
@@ -246,6 +256,7 @@ class AudioDeviceCatalog(QObject):
             direction=direction,
             is_default=device.isDefault(),
             pipewire_node_id=matched_node.node_id if matched_node else None,
+            pipewire_node_name=matched_node.name if matched_node else None,
         )
 
 

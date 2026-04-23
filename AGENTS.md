@@ -2,72 +2,77 @@
 
 ## Overview
 
-Wyoming Voice Bridge is a lightweight, open-source desktop application for Linux that brings
-together local speech recognition and speech synthesis into a single, easy-to-use tool. Built
-with privacy in mind, it communicates exclusively with locally hosted AI services — nothing is
-sent to the cloud. The application is written in Python and designed to run natively on modern Linux
-desktops using the Wayland display protocol.
+Wyoming Voice Bridge is a lightweight, open-source Linux desktop application that keeps an
+always-on local microphone monitor running, detects speech automatically, and bridges that speech
+to locally hosted Wyoming-compatible STT and TTS services. The application is written in Python,
+uses Qt for the desktop interface, and is designed for modern Linux desktops with PipeWire.
+
+The project is **Nix-first** for local execution and testing. The primary way to run the project is
+through `flake.nix`, using commands such as `nix run .#`, `nix build .#`, and
+`nix profile install .#`.
 
 ---
 
 ## Purpose
 
-The core goal of this project is to give users a simple, responsive way to interact with their
-own locally hosted voice AI services. Rather than relying on proprietary assistants or cloud
-APIs, Wyoming Voice Bridge acts as a bridge between the user's voice and self-hosted speech
-services — keeping everything on the user's own hardware.
+The goal of Wyoming Voice Bridge is to provide a simple local voice interface that:
 
-This makes the tool especially appealing to:
+- Continuously monitors a selected microphone without sending every sound to STT
+- Uses local voice activity detection to decide when a real utterance has started and ended
+- Streams detected speech to a local Wyoming STT service
+- Sends the resulting transcript to a local Wyoming TTS service
+- Plays the generated response through user-selected outputs and optionally into a PipeWire-backed virtual microphone path
 
-- Privacy-conscious users who want voice interaction without sending data to third parties
-- Home automation enthusiasts running local AI stacks (such as Home Assistant with Wyoming add-ons)
-- Developers and tinkerers experimenting with local speech AI pipelines
-- Accessibility-focused users who want a customizable, offline-capable voice interface
+All processing is intended to stay on the user's own hardware or local network.
 
 ---
 
 ## How It Works (Non-Technical Summary)
 
-When the user holds down a designated button, the application begins listening through their
-chosen microphone. That audio is streamed in real time to a local Speech-to-Text (STT) service,
-which returns transcribed text back as a stream — meaning the application receives results
-continuously as the user speaks, rather than waiting until they let go of the button.
+When the application is running, it keeps the selected microphone open and listens locally for
+speech activity. Background sounds should be ignored unless they look enough like real speech to
+cross the voice detection thresholds.
 
-That text is then forwarded to a local Text-to-Speech (TTS) service, which streams generated
-audio back to the application in real time. Playback can begin as soon as the first audio
-arrives, without waiting for the entire response to be produced first.
+When speech is detected while the app is idle, the application starts a Wyoming STT session and
+streams microphone audio to it in real time. A short amount of buffered audio from just before the
+detection point is also included so the beginning of the utterance is less likely to be clipped.
 
-The entire interaction — from holding the button to hearing the response — is handled locally
-and privately.
+Once the application decides the user has stopped speaking, it finalizes the STT stream, receives
+the transcript, and forwards that text to a Wyoming TTS service. The generated audio is then
+played back immediately through the configured output devices.
+
+While a transcription or TTS response is already in progress, the application does not start a new
+STT session. Only one voice interaction should be active at a time.
 
 ---
 
 ## Key Features
 
-- **Push-to-talk input** — Audio capture only happens while the designated key is held, keeping
-  interactions intentional and preventing accidental recording. The chosen key will be registered
-  as a global shortcut with the desktop environment via the XDG Global Shortcuts portal — the
-  modern standard for system-wide key bindings on Wayland — so the push-to-talk key works even
-  when the application window is not in focus.
+- **Always-on microphone monitoring** — The app keeps a microphone stream open while running so it
+  can react quickly when speech begins.
 
-- **Local STT integration** — Streams microphone audio in real time to any Wyoming-compatible
-  speech-to-text service, receiving transcribed text back as it becomes available rather than
-  waiting for the full recording to complete.
+- **Voice activity detection (VAD)** — Local speech detection is used to avoid sending random room
+  noise to STT and to reduce clipped speech at the start or end of an utterance.
 
-- **Local TTS integration** — Connects to any Wyoming-compatible text-to-speech service and
-  streams the generated audio response back in real time, allowing playback to begin before the
-  full response has finished being produced.
+- **Single active interaction** — The application should allow only one STT/TTS interaction at a
+  time so overlapping transcription and playback pipelines do not compete with each other.
 
-- **Flexible audio routing** — Uses PipeWire, the modern Linux audio system, to direct
-  microphone input from a chosen device and send audio output to one or more selected playback
-  devices.
+- **Local STT integration** — Streams microphone audio to Wyoming-compatible speech-to-text
+  services and receives transcript updates back from them.
 
-- **Simple configuration UI** — A clean, minimal desktop interface built with Qt, a mature and
-  widely supported GUI framework with first-class Wayland support, lets users configure all
-  connection settings and audio devices in one place without editing any configuration files.
+- **Local TTS integration** — Sends transcripts to Wyoming-compatible text-to-speech services and
+  plays streamed audio responses locally.
 
-- **Wayland-native** — Designed from the ground up to run on modern Linux desktops using the
-  Wayland display protocol, without requiring legacy compatibility layers.
+- **Flexible audio routing** — Uses Qt audio I/O together with PipeWire-aware device discovery so
+  users can choose microphone and playback devices.
+
+- **PipeWire virtual microphone support** — Can manage a PipeWire loopback configuration that
+  exposes a playback sink for the app and a linked source that other applications can select as a
+  microphone. The virtual microphone should carry the app's TTS output only, not the user's live
+  microphone audio.
+
+- **Simple configuration UI** — A Qt-based desktop interface lets users configure service
+  endpoints, audio routing, and virtual microphone settings without editing files by hand.
 
 ---
 
@@ -75,13 +80,11 @@ and privately.
 
 Through the graphical interface, users can set:
 
-- The network address and port for their STT service
-- The network address and port for their TTS service
-- Which microphone to use for voice input
-- Which audio output device(s) to use for playback (multiple selections supported)
-
-These settings are intended to be straightforward enough for non-technical users while remaining
-flexible enough for advanced home server setups.
+- The network address and port for the STT service
+- The network address and port for the TTS service
+- Which microphone to use for always-on monitoring
+- Which audio output device(s) to use for playback
+- The PipeWire node name and description for the managed virtual microphone sink
 
 ---
 
@@ -89,35 +92,34 @@ flexible enough for advanced home server setups.
 
 Wyoming Voice Bridge is built around a few guiding principles:
 
-1. **Local first.** All processing happens on the user's own hardware or local network. No
-   account, no subscription, no data leaving the home.
-
-2. **Simplicity.** The interface should be approachable. Users should be able to get up and
-   running with minimal friction.
-
-3. **Composability.** By speaking the Wyoming protocol, this application can work with a
-   growing ecosystem of local AI voice services — it isn't locked to any single backend.
-
-4. **Lightweight.** The application itself should have a minimal footprint, acting purely as a
-   coordination layer between the user, their audio hardware, and their AI services.
+1. **Local first.** Voice data should remain on the user's own machine or local network.
+2. **Simple operation.** The app should feel automatic and responsive without requiring push-to-talk.
+3. **Composability.** By speaking the Wyoming protocol, the app should work with many local STT and
+   TTS backends.
+4. **Practical Linux integration.** The app should fit naturally into PipeWire-based Linux desktop
+   environments and support useful routing setups such as virtual microphones.
+5. **Nix-first reproducibility.** The main supported way to run and test the project should remain
+   the Nix flake so developers and testers get a reproducible environment.
 
 ---
 
 ## Protocol
 
 This project uses the **Wyoming protocol** — an open, lightweight protocol designed specifically
-for local voice AI services. It is the same protocol used by Home Assistant's voice pipeline and
-a variety of popular local STT and TTS add-ons, making Wyoming Voice Bridge naturally compatible
-with a wide range of existing self-hosted setups.
+for local voice AI services. It is used throughout the Rhasspy and Home Assistant voice ecosystem,
+which makes Wyoming Voice Bridge naturally compatible with a wide range of existing self-hosted
+speech services.
 
 ---
 
 ## Project Status
 
-This document represents the initial planning draft for Wyoming Voice Bridge. Development is in
-the early stages, with the core architecture and feature set now defined. The next steps involve
-establishing the foundational Python codebase — managed with UV, a modern and fast Python
-package manager — implementing Wyoming protocol communication, wiring up PipeWire audio, and
-building out the Qt configuration interface.
+The project is still in an early implementation phase. The main active development goals are:
 
-Contributions, feedback, and ideas are welcome as the project takes shape.
+- refining the always-on open-microphone workflow
+- improving voice activity detection behavior
+- keeping the STT/TTS pipeline strictly single-session
+- expanding PipeWire routing support, including virtual microphone workflows
+- keeping the Nix flake as the primary run and test path
+
+Contributions, feedback, and ideas are welcome.

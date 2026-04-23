@@ -2,16 +2,38 @@
 
 from __future__ import annotations
 
+import logging
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from .audio import AudioCaptureStream, AudioDeviceCatalog, MultiOutputPlayer
-from .constants import APP_ID, APP_NAME
+from .constants import APP_NAME
 from .controller import BridgeController
-from .shortcuts import GlobalShortcutPortal
+from .paths import ensure_app_directories, get_log_file_path
 from .storage import JsonConfigStore
 from .ui import MainWindow
+
+LOGGER = logging.getLogger(__name__)
+
+
+# Usage: configure file-based application logging before any long-lived controller or audio objects start emitting diagnostic messages.
+# Parameters: none.
+# Return: the Path to the log file receiving application log records.
+def configure_application_logging() -> Path:
+    """Initialize application logging and return the active log file path."""
+
+    ensure_app_directories()
+    log_path = get_log_file_path()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8")],
+        force=True,
+    )
+    LOGGER.info("Application logging initialized at %s", log_path)
+    return log_path
 
 
 # Usage: create or reuse the global QApplication instance and apply app metadata used by desktop integration.
@@ -25,7 +47,6 @@ def create_qt_application(argv: list[str]) -> QApplication:
         application = QApplication(argv)
 
     application.setApplicationName(APP_NAME)
-    application.setDesktopFileName(APP_ID)
     application.setOrganizationDomain("github.io")
     application.setOrganizationName("Wyoming Voice Bridge")
     return application
@@ -41,13 +62,11 @@ def build_application_components() -> tuple[BridgeController, AudioDeviceCatalog
     catalog = AudioDeviceCatalog()
     capture = AudioCaptureStream(catalog)
     player = MultiOutputPlayer(catalog)
-    shortcut_portal = GlobalShortcutPortal()
     controller = BridgeController(
         store=store,
         catalog=catalog,
         capture=capture,
         player=player,
-        shortcut_portal=shortcut_portal,
     )
     window = MainWindow(controller=controller, catalog=catalog)
     return controller, catalog, window
@@ -60,9 +79,9 @@ def run(argv: list[str] | None = None) -> int:
     """Bootstrap and run the Wyoming Voice Bridge desktop application."""
 
     argv = argv or sys.argv
+    configure_application_logging()
     application = create_qt_application(argv)
     controller, _catalog, window = build_application_components()
     controller.load_configuration()
     window.show()
-    controller.register_shortcut_from_config()
     return application.exec()

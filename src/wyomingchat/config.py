@@ -6,12 +6,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .constants import (
-    DEFAULT_PREFERRED_TRIGGER,
-    DEFAULT_SHORTCUT_DESCRIPTION,
+    DEFAULT_MIC_GATE_THRESHOLD_PERCENT,
     DEFAULT_STT_HOST,
     DEFAULT_STT_PORT,
     DEFAULT_TTS_HOST,
     DEFAULT_TTS_PORT,
+    DEFAULT_VIRTUAL_MIC_DESCRIPTION,
+    DEFAULT_VIRTUAL_MIC_NODE_NAME,
 )
 
 
@@ -66,6 +67,16 @@ def coerce_port(value: Any, default: int) -> int:
     if 1 <= parsed_port <= 65535:
         return parsed_port
     return default
+
+
+# Usage: coerce an arbitrary value into a percentage while clamping it into the inclusive 0-100 slider range.
+# Parameters: value - the raw value that should become a percentage; default - the fallback percentage when conversion fails.
+# Return: an integer percentage constrained to the 0-100 range.
+def coerce_percentage(value: Any, default: int) -> int:
+    """Return a percentage parsed from a raw value and clamped to the 0-100 range."""
+
+    parsed_percentage = coerce_int(value, default)
+    return max(0, min(100, parsed_percentage))
 
 
 @dataclass(slots=True)
@@ -140,43 +151,130 @@ class AudioSelection:
 
 
 @dataclass(slots=True)
-class ShortcutConfig:
-    """Store the user's preferred global shortcut details."""
+class TtsVoiceConfig:
+    """Store the Wyoming TTS voice fields the user selected for synthesis."""
 
-    preferred_trigger: str = DEFAULT_PREFERRED_TRIGGER
-    description: str = DEFAULT_SHORTCUT_DESCRIPTION
-    trigger_description: str | None = None
-    enabled: bool = True
+    name: str = ""
+    language: str = ""
+    speaker: str = ""
 
-    # Usage: serialize global shortcut preferences for JSON persistence.
+    # Usage: report whether any voice-selection field has been configured by the user.
     # Parameters: none.
-    # Return: a JSON-compatible dictionary with shortcut settings.
+    # Return: True when at least one of name, language, or speaker is non-empty.
+    def is_configured(self) -> bool:
+        """Return whether this voice selection contains any explicit voice preference."""
+
+        return any(part for part in (self.name.strip(), self.language.strip(), self.speaker.strip()))
+
+    # Usage: build the Wyoming request payload fragment used inside synthesize events.
+    # Parameters: none.
+    # Return: a dictionary containing only non-empty voice fields, or None when no voice is selected.
+    def to_request_payload(self) -> dict[str, str] | None:
+        """Return the Wyoming voice payload for synthesis requests, or None when unset."""
+
+        payload = {
+            key: value
+            for key, value in {
+                "name": self.name.strip(),
+                "language": self.language.strip(),
+                "speaker": self.speaker.strip(),
+            }.items()
+            if value
+        }
+        return payload or None
+
+    # Usage: create a compact user-facing label for the currently selected or discovered voice option.
+    # Parameters: none.
+    # Return: a readable label containing the voice name plus optional language and speaker details.
+    def to_display_label(self) -> str:
+        """Return a readable label for UI voice selectors and status messages."""
+
+        base_name = self.name.strip() or "Default server voice"
+        details = [part for part in (self.language.strip(), self.speaker.strip()) if part]
+        if not details:
+            return base_name
+        return f"{base_name} ({' / '.join(details)})"
+
+    # Usage: serialize the selected voice for JSON persistence.
+    # Parameters: none.
+    # Return: a JSON-compatible dictionary containing the selected voice fields.
     def to_dict(self) -> dict[str, Any]:
-        """Convert the shortcut configuration into a JSON-compatible dictionary."""
+        """Convert the voice selection into a JSON-compatible dictionary."""
 
         return {
-            "preferred_trigger": self.preferred_trigger,
-            "description": self.description,
-            "trigger_description": self.trigger_description,
-            "enabled": self.enabled,
+            "name": self.name,
+            "language": self.language,
+            "speaker": self.speaker,
         }
 
     @classmethod
-    # Usage: build a ShortcutConfig from JSON configuration data.
-    # Parameters: payload - dictionary data read from disk, which may be partially populated.
-    # Return: a ShortcutConfig with normalized text fields and defaults.
-    def from_dict(cls, payload: dict[str, Any] | None) -> "ShortcutConfig":
-        """Create a ShortcutConfig from persisted JSON data."""
+    # Usage: build a TtsVoiceConfig from JSON configuration data or another loose mapping.
+    # Parameters: payload - dictionary data read from disk, which may be missing some voice fields.
+    # Return: a normalized TtsVoiceConfig with blank strings for missing fields.
+    def from_dict(cls, payload: dict[str, Any] | None) -> "TtsVoiceConfig":
+        """Create a TtsVoiceConfig from persisted JSON data."""
 
         payload = payload if isinstance(payload, dict) else {}
-        preferred_trigger = coerce_str(payload.get("preferred_trigger"), DEFAULT_PREFERRED_TRIGGER)
-        description = coerce_str(payload.get("description"), DEFAULT_SHORTCUT_DESCRIPTION)
-        trigger_description = payload.get("trigger_description")
         return cls(
-            preferred_trigger=preferred_trigger,
-            description=description,
-            trigger_description=str(trigger_description).strip() if trigger_description else None,
-            enabled=coerce_bool(payload.get("enabled"), True),
+            name=coerce_str(payload.get("name"), ""),
+            language=coerce_str(payload.get("language"), ""),
+            speaker=coerce_str(payload.get("speaker"), ""),
+        )
+
+
+# Usage: build a user-facing label for one selectable TTS voice while preferring bare speaker names when a single voice exposes multiple speakers.
+# Parameters: voice - the selectable voice option being rendered; available_voices - the full set of currently selectable voice options shown in the same UI control.
+# Return: a concise display label that keeps multi-speaker voice options readable without changing the Wyoming request payload.
+def build_tts_voice_display_label(voice: TtsVoiceConfig, available_voices: list[TtsVoiceConfig]) -> str:
+    """Return a readable UI label for one selectable TTS voice option."""
+
+    matching_speaker_variants = [
+        option
+        for option in available_voices
+        if option.name.strip() == voice.name.strip() and option.speaker.strip()
+    ]
+    distinct_speaker_names = {option.speaker.strip().casefold() for option in matching_speaker_variants}
+    if voice.speaker.strip() and len(distinct_speaker_names) > 1:
+        speaker_label = voice.speaker.strip()
+        if voice.language.strip():
+            return f"{speaker_label} ({voice.language.strip()})"
+        return speaker_label
+
+    return voice.to_display_label()
+
+
+@dataclass(slots=True)
+class VirtualMicrophoneConfig:
+    """Store the PipeWire node metadata used to create a virtual microphone sink."""
+
+    enabled: bool = False
+    node_name: str = DEFAULT_VIRTUAL_MIC_NODE_NAME
+    description: str = DEFAULT_VIRTUAL_MIC_DESCRIPTION
+
+    # Usage: serialize virtual microphone settings for JSON persistence.
+    # Parameters: none.
+    # Return: a JSON-compatible dictionary with the PipeWire node settings.
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the virtual microphone configuration into a JSON-compatible dictionary."""
+
+        return {
+            "enabled": self.enabled,
+            "node_name": self.node_name,
+            "description": self.description,
+        }
+
+    @classmethod
+    # Usage: build a VirtualMicrophoneConfig from JSON configuration data.
+    # Parameters: payload - dictionary data read from disk, which may be partially populated.
+    # Return: a VirtualMicrophoneConfig with normalized fields and safe defaults.
+    def from_dict(cls, payload: dict[str, Any] | None) -> "VirtualMicrophoneConfig":
+        """Create a VirtualMicrophoneConfig from persisted JSON data."""
+
+        payload = payload if isinstance(payload, dict) else {}
+        return cls(
+            enabled=coerce_bool(payload.get("enabled"), False),
+            node_name=coerce_str(payload.get("node_name"), DEFAULT_VIRTUAL_MIC_NODE_NAME),
+            description=coerce_str(payload.get("description"), DEFAULT_VIRTUAL_MIC_DESCRIPTION),
         )
 
 
@@ -190,8 +288,10 @@ class AppConfig:
     tts_endpoint: ServiceEndpoint = field(
         default_factory=lambda: ServiceEndpoint(DEFAULT_TTS_HOST, DEFAULT_TTS_PORT)
     )
+    tts_voice: TtsVoiceConfig = field(default_factory=TtsVoiceConfig)
+    mic_gate_threshold_percent: int = DEFAULT_MIC_GATE_THRESHOLD_PERCENT
     audio: AudioSelection = field(default_factory=AudioSelection)
-    shortcut: ShortcutConfig = field(default_factory=ShortcutConfig)
+    virtual_microphone: VirtualMicrophoneConfig = field(default_factory=VirtualMicrophoneConfig)
     last_transcript: str = ""
 
     # Usage: serialize the full app configuration for disk persistence.
@@ -203,8 +303,10 @@ class AppConfig:
         return {
             "stt_endpoint": self.stt_endpoint.to_dict(),
             "tts_endpoint": self.tts_endpoint.to_dict(),
+            "tts_voice": self.tts_voice.to_dict(),
+            "mic_gate_threshold_percent": self.mic_gate_threshold_percent,
             "audio": self.audio.to_dict(),
-            "shortcut": self.shortcut.to_dict(),
+            "virtual_microphone": self.virtual_microphone.to_dict(),
             "last_transcript": self.last_transcript,
         }
 
@@ -216,6 +318,7 @@ class AppConfig:
         """Create an AppConfig from persisted JSON data."""
 
         payload = payload if isinstance(payload, dict) else {}
+        legacy_virtual_mic = payload.get("virtual_microphone")
         return cls(
             stt_endpoint=ServiceEndpoint.from_dict(
                 payload.get("stt_endpoint"),
@@ -227,8 +330,13 @@ class AppConfig:
                 default_host=DEFAULT_TTS_HOST,
                 default_port=DEFAULT_TTS_PORT,
             ),
+            tts_voice=TtsVoiceConfig.from_dict(payload.get("tts_voice")),
+            mic_gate_threshold_percent=coerce_percentage(
+                payload.get("mic_gate_threshold_percent"),
+                DEFAULT_MIC_GATE_THRESHOLD_PERCENT,
+            ),
             audio=AudioSelection.from_dict(payload.get("audio")),
-            shortcut=ShortcutConfig.from_dict(payload.get("shortcut")),
+            virtual_microphone=VirtualMicrophoneConfig.from_dict(legacy_virtual_mic),
             last_transcript=coerce_str(payload.get("last_transcript"), ""),
         )
 
