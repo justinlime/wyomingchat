@@ -322,6 +322,7 @@ class AppConfig:
         default_factory=lambda: ServiceEndpoint(DEFAULT_TTS_HOST, DEFAULT_TTS_PORT)
     )
     tts_voice: TtsVoiceConfig = field(default_factory=TtsVoiceConfig)
+    tts_streaming_supported: bool = False
     mic_gate_threshold_percent: int = DEFAULT_MIC_GATE_THRESHOLD_PERCENT
     mic_gain: float = DEFAULT_MIC_GAIN
     tts_gain: float = DEFAULT_TTS_GAIN
@@ -340,6 +341,7 @@ class AppConfig:
             "stt_endpoint": self.stt_endpoint.to_dict(),
             "tts_endpoint": self.tts_endpoint.to_dict(),
             "tts_voice": self.tts_voice.to_dict(),
+            "tts_streaming_supported": self.tts_streaming_supported,
             "mic_gate_threshold_percent": self.mic_gate_threshold_percent,
             "mic_gain": self.mic_gain,
             "tts_gain": self.tts_gain,
@@ -370,6 +372,7 @@ class AppConfig:
                 default_port=DEFAULT_TTS_PORT,
             ),
             tts_voice=TtsVoiceConfig.from_dict(payload.get("tts_voice")),
+            tts_streaming_supported=coerce_bool(payload.get("tts_streaming_supported"), False),
             mic_gate_threshold_percent=coerce_percentage(
                 payload.get("mic_gate_threshold_percent"),
                 DEFAULT_MIC_GATE_THRESHOLD_PERCENT,

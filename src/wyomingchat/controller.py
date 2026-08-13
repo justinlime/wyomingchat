@@ -166,6 +166,10 @@ class BridgeController(QObject):
         """Load configuration from disk, emit it to the UI, and start microphone monitoring."""
 
         self._config = self._store.load()
+        # Restore the last-discovered streaming synthesis capability so TTS
+        # stays on the streaming protocol across app restarts without needing
+        # a fresh voice query. A later voice query refreshes this value.
+        self._tts_streaming_supported = self._config.tts_streaming_supported
         self.configuration_loaded.emit(self._config)
         self.status_changed.emit(f"Loaded configuration from {self._store.config_path}")
         self._restart_microphone_monitor()
@@ -177,7 +181,16 @@ class BridgeController(QObject):
     def save_configuration(self, config: AppConfig) -> Path:
         """Persist the provided configuration, make it active, and restart monitoring if needed."""
 
+        # The UI form builds a fresh AppConfig that does not carry the
+        # discovered streaming capability. Preserve the last-known capability
+        # only while the TTS endpoint is unchanged; saving a different endpoint
+        # resets it because the new server's capability is unknown until the
+        # user re-queries voices against it.
+        endpoint_changed = config.tts_endpoint != self._config.tts_endpoint
         self._config = config
+        if endpoint_changed:
+            self._tts_streaming_supported = False
+        self._config.tts_streaming_supported = self._tts_streaming_supported
         saved_path = self._store.save(config)
         self.configuration_saved.emit(str(saved_path))
         self.status_changed.emit(f"Saved configuration to {saved_path}")
@@ -376,6 +389,10 @@ class BridgeController(QObject):
             return
 
         self._tts_streaming_supported = bool(supported)
+        # Persist the discovered capability so the next app start keeps using
+        # the streaming protocol with the same saved TTS endpoint.
+        self._config.tts_streaming_supported = self._tts_streaming_supported
+        self._store.save(self._config)
         LOGGER.info("TTS endpoint streaming synthesis support: %s", self._tts_streaming_supported)
 
     # Usage: clear the active voice-query session reference when the latest query worker exits.

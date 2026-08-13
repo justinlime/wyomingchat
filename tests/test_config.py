@@ -159,6 +159,23 @@ def test_mic_gain_round_trips_and_clamps() -> None:
 
 
 
+# Usage: verify that the streaming-synthesis capability flag persists and tolerates legacy payloads.
+# Parameters: none.
+# Return: None.
+def test_tts_streaming_supported_round_trips_and_defaults() -> None:
+    """Ensure tts_streaming_supported persists and falls back to False on legacy configs."""
+
+    assert AppConfig().tts_streaming_supported is False
+
+    original = AppConfig()
+    original.tts_streaming_supported = True
+    assert AppConfig.from_dict(original.to_dict()).tts_streaming_supported is True
+
+    assert AppConfig.from_dict({}).tts_streaming_supported is False
+    assert AppConfig.from_dict({"tts_streaming_supported": "yes"}).tts_streaming_supported is True
+    assert AppConfig.from_dict({"tts_streaming_supported": "false"}).tts_streaming_supported is False
+
+
 # Usage: verify that the silence timeout persists and is clamped to the supported range.
 # Parameters: none.
 # Return: None.

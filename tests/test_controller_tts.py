@@ -6,6 +6,7 @@ import pytest
 
 from wyomingchat import controller as controller_module
 from wyomingchat.audio import AudioCaptureStream, AudioDeviceCatalog, MultiOutputPlayer
+from wyomingchat.config import AppConfig, ServiceEndpoint
 from wyomingchat.controller import BridgeController
 from wyomingchat.storage import JsonConfigStore
 
@@ -140,8 +141,8 @@ def test_set_stop_silence_ms_updates_live_detector(tmp_path) -> None:
     assert controller._voice_detector._stop_silence_frames == 125  # 4000ms / 32ms
 
 
-# Usage: verify that streamed TTS chunks reach the player incrementally, not in a burst at the end.
-# Parameters: tmp_path - pytest fixture; qapp - module-level Qt app fixture.
+# Usage: verify that the server's streaming capability is recorded and passed to new TTS sessions.
+# Parameters: tmp_path - pytest fixture.
 # Return: None.
 def test_tts_streaming_support_flag_flows_into_tts_sessions(tmp_path) -> None:
     """Ensure the server's streaming capability is recorded and passed to new TTS sessions."""
@@ -157,6 +158,59 @@ def test_tts_streaming_support_flag_flows_into_tts_sessions(tmp_path) -> None:
 
     controller._handle_tts_streaming_support(controller._tts_voice_query_generation, False)
     assert controller._tts_streaming_supported is False
+
+
+# Usage: verify that the discovered streaming capability survives an app restart through persisted config.
+# Parameters: tmp_path - pytest fixture.
+# Return: None.
+def test_tts_streaming_support_persists_across_restart(tmp_path) -> None:
+    """Ensure a restart restores streaming synthesis without requiring a fresh voice query."""
+
+    controller = build_controller(tmp_path)
+    controller._handle_tts_streaming_support(controller._tts_voice_query_generation, True)
+    assert controller._tts_streaming_supported is True
+
+    # The discovery handler persisted the flag to disk; a fresh controller
+    # simulating an app restart must restore it from the saved config.
+    restarted = build_controller(tmp_path)
+    restarted.load_configuration()
+    assert restarted._tts_streaming_supported is True
+
+
+# Usage: verify that saving the form config preserves the streaming flag when the TTS endpoint is unchanged.
+# Parameters: tmp_path - pytest fixture.
+# Return: None.
+def test_save_configuration_preserves_streaming_flag_for_unchanged_endpoint(tmp_path) -> None:
+    """Ensure a form save with the same TTS endpoint keeps the discovered capability."""
+
+    controller = build_controller(tmp_path)
+    controller._tts_streaming_supported = True
+    controller._config.tts_streaming_supported = True
+
+    form_config = AppConfig()
+    form_config.tts_endpoint = controller._config.tts_endpoint
+    controller.save_configuration(form_config)
+
+    assert controller._tts_streaming_supported is True
+    assert controller._config.tts_streaming_supported is True
+
+
+# Usage: verify that saving the form config resets the streaming flag when the TTS endpoint changes.
+# Parameters: tmp_path - pytest fixture.
+# Return: None.
+def test_save_configuration_resets_streaming_flag_on_endpoint_change(tmp_path) -> None:
+    """Ensure a form save pointing at a different TTS server requires a fresh voice query."""
+
+    controller = build_controller(tmp_path)
+    controller._tts_streaming_supported = True
+    controller._config.tts_streaming_supported = True
+
+    changed_config = AppConfig()
+    changed_config.tts_endpoint = ServiceEndpoint(host="10.0.0.9", port=10200)
+    controller.save_configuration(changed_config)
+
+    assert controller._tts_streaming_supported is False
+    assert controller._config.tts_streaming_supported is False
 
 
 # Usage: verify that streamed TTS chunks reach the player incrementally, not in a burst at the end.
