@@ -104,9 +104,13 @@ The UI currently lets you configure:
 - STT host and port
 - TTS host and port
 - Microphone input device used for always-on monitoring
+- Microphone gate threshold (start speech above a background level)
+- Microphone boost (1x-10x gain for quiet microphones)
 - One or more playback outputs for synthesized audio
 - Virtual microphone routing: PipeWire loopback (Linux) or virtual audio cable (Windows)
 - PipeWire virtual microphone node name and description (Linux only)
+- Streaming synthesis (default on): completed sentences are synthesized while you are still
+  speaking the rest of the utterance, then played back in order after you stop
 
 ## PipeWire virtual microphone (Linux)
 

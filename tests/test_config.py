@@ -140,3 +140,33 @@ def test_virtual_microphone_cable_device_id_round_trips() -> None:
 
     assert restored == original
     assert restored.cable_device_id == "cable-input-id-1"
+
+
+# Usage: verify that the microphone boost multiplier survives a config round trip.
+# Parameters: none.
+# Return: None.
+def test_mic_gain_round_trips_and_clamps() -> None:
+    """Ensure mic_gain persists and is clamped to the supported range."""
+
+    original = AppConfig()
+    original.mic_gain = 3.5
+
+    restored = AppConfig.from_dict(original.to_dict())
+    assert restored.mic_gain == 3.5
+
+    out_of_range = AppConfig.from_dict({"mic_gain": 50.0})
+    assert out_of_range.mic_gain == 10.0
+
+
+# Usage: verify that the streaming synthesis toggle survives a config round trip.
+# Parameters: none.
+# Return: None.
+def test_streaming_synthesis_round_trips() -> None:
+    """Ensure streaming_synthesis persists and defaults to enabled."""
+
+    assert AppConfig().streaming_synthesis is True
+
+    original = AppConfig()
+    original.streaming_synthesis = False
+    restored = AppConfig.from_dict(original.to_dict())
+    assert restored.streaming_synthesis is False

@@ -7,12 +7,14 @@ from typing import Any
 
 from .constants import (
     DEFAULT_MIC_GATE_THRESHOLD_PERCENT,
+    DEFAULT_MIC_GAIN,
     DEFAULT_STT_HOST,
     DEFAULT_STT_PORT,
     DEFAULT_TTS_HOST,
     DEFAULT_TTS_PORT,
     DEFAULT_VIRTUAL_MIC_DESCRIPTION,
     DEFAULT_VIRTUAL_MIC_NODE_NAME,
+    MAX_MIC_GAIN,
 )
 
 
@@ -55,6 +57,18 @@ def coerce_bool(value: Any, default: bool) -> bool:
         if lowered in {"1", "true", "yes", "on"}:
             return True
     return bool(value)
+
+
+# Usage: coerce an arbitrary value into a float while falling back to a default on invalid input.
+# Parameters: value - the raw value that should become a float; default - the fallback float when conversion fails.
+# Return: a validated float value.
+def coerce_float(value: Any, default: float) -> float:
+    """Return a float parsed from a raw value, or the provided default on failure."""
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # Usage: coerce an arbitrary value into a TCP port number while rejecting values outside the valid 1-65535 range.
@@ -304,6 +318,8 @@ class AppConfig:
     )
     tts_voice: TtsVoiceConfig = field(default_factory=TtsVoiceConfig)
     mic_gate_threshold_percent: int = DEFAULT_MIC_GATE_THRESHOLD_PERCENT
+    mic_gain: float = DEFAULT_MIC_GAIN
+    streaming_synthesis: bool = True
     audio: AudioSelection = field(default_factory=AudioSelection)
     virtual_microphone: VirtualMicrophoneConfig = field(default_factory=VirtualMicrophoneConfig)
     last_transcript: str = ""
@@ -319,6 +335,8 @@ class AppConfig:
             "tts_endpoint": self.tts_endpoint.to_dict(),
             "tts_voice": self.tts_voice.to_dict(),
             "mic_gate_threshold_percent": self.mic_gate_threshold_percent,
+            "mic_gain": self.mic_gain,
+            "streaming_synthesis": self.streaming_synthesis,
             "audio": self.audio.to_dict(),
             "virtual_microphone": self.virtual_microphone.to_dict(),
             "last_transcript": self.last_transcript,
@@ -349,6 +367,11 @@ class AppConfig:
                 payload.get("mic_gate_threshold_percent"),
                 DEFAULT_MIC_GATE_THRESHOLD_PERCENT,
             ),
+            mic_gain=max(
+                1.0,
+                min(MAX_MIC_GAIN, coerce_float(payload.get("mic_gain"), DEFAULT_MIC_GAIN)),
+            ),
+            streaming_synthesis=coerce_bool(payload.get("streaming_synthesis"), True),
             audio=AudioSelection.from_dict(payload.get("audio")),
             virtual_microphone=VirtualMicrophoneConfig.from_dict(legacy_virtual_mic),
             last_transcript=coerce_str(payload.get("last_transcript"), ""),

@@ -146,6 +146,13 @@ class MainWindow(QMainWindow):
         self._refresh_tts_voices_button.setToolTip(
             "Send a Wyoming describe/info request to the configured TTS server and pick a specific voice when the server advertises one."
         )
+        self._streaming_synthesis_checkbox = QCheckBox(
+            "Streaming synthesis (synthesize each completed sentence as you speak)"
+        )
+        self._streaming_synthesis_checkbox.setToolTip(
+            "Confirmed sentences are synthesized while you are still speaking the rest of the utterance, "
+            "and played back in order once you stop - reducing perceived latency for multi-sentence replies."
+        )
 
         tts_voice_row = QWidget()
         tts_voice_layout = QHBoxLayout(tts_voice_row)
@@ -158,6 +165,7 @@ class MainWindow(QMainWindow):
         layout.addRow("TTS host", self._tts_host_edit)
         layout.addRow("TTS port", self._tts_port_spin)
         layout.addRow("TTS voice", tts_voice_row)
+        layout.addRow(self._streaming_synthesis_checkbox)
         return page
 
     # Usage: build the tab containing microphone and playback selectors.
@@ -213,14 +221,28 @@ class MainWindow(QMainWindow):
         slider_layout.addWidget(self._mic_gate_slider, stretch=1)
         slider_layout.addWidget(self._mic_gate_value_label)
 
+        self._mic_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self._mic_gain_slider.setRange(10, 100)
+        self._mic_gain_slider.setSingleStep(5)
+        self._mic_gain_slider.valueChanged.connect(self._handle_mic_gain_slider_changed)
+        self._mic_gain_value_label = QLabel("1.0x")
+
+        boost_row = QWidget()
+        boost_layout = QHBoxLayout(boost_row)
+        boost_layout.setContentsMargins(0, 0, 0, 0)
+        boost_layout.addWidget(self._mic_gain_slider, stretch=1)
+        boost_layout.addWidget(self._mic_gain_value_label)
+
         hint = QLabel(
             "Increase the gate if quiet background sounds or button taps keep triggering the app. "
+            "If your mic reads low on the header meter while you speak normally, raise the Mic boost. "
             "Watch the live mic level in the header while the room is quiet, then set the gate slightly above that background level."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
 
         layout.addRow("Start speech above", slider_row)
+        layout.addRow("Mic boost", boost_row)
         layout.addRow(hint)
         return page
 
@@ -389,6 +411,8 @@ class MainWindow(QMainWindow):
         self._tts_port_spin.setValue(config.tts_endpoint.port)
         self._refresh_tts_voice_combo(config.tts_voice)
         self._set_mic_gate_threshold(config.mic_gate_threshold_percent)
+        self._set_mic_boost(config.mic_gain)
+        self._streaming_synthesis_checkbox.setChecked(config.streaming_synthesis)
         self._virtual_mic_enabled_checkbox.setChecked(config.virtual_microphone.enabled)
         mic_mode = virtual_mic_mode()
         if mic_mode == "pipewire":
@@ -509,6 +533,18 @@ class MainWindow(QMainWindow):
         self._mic_gate_slider.blockSignals(False)
         self._mic_gate_value_label.setText(f"{normalized_threshold}%")
 
+    # Usage: display the supplied microphone boost multiplier in the boost slider row.
+    # Parameters: gain - the linear boost multiplier (1.0x means no boost).
+    # Return: None.
+    def _set_mic_boost(self, gain: float) -> None:
+        """Display the supplied microphone boost multiplier in the slider row."""
+
+        normalized_gain = max(1.0, min(10.0, float(gain)))
+        self._mic_gain_slider.blockSignals(True)
+        self._mic_gain_slider.setValue(int(round(normalized_gain * 10)))
+        self._mic_gain_slider.blockSignals(False)
+        self._mic_gain_value_label.setText(f"{normalized_gain:.1f}x")
+
     # Usage: fill the microphone combo box and restore the selected device when possible.
     # Parameters: selected_id - the previously selected microphone id, or None to select the default device.
     # Return: None.
@@ -598,6 +634,8 @@ class MainWindow(QMainWindow):
             ),
             tts_voice=self._collect_selected_tts_voice(),
             mic_gate_threshold_percent=self._mic_gate_slider.value(),
+            mic_gain=self._mic_gain_slider.value() / 10.0,
+            streaming_synthesis=self._streaming_synthesis_checkbox.isChecked(),
             audio=AudioSelection(
                 input_device_id=self._input_combo.currentData(),
                 output_device_ids=self._collect_output_device_ids(),
@@ -653,6 +691,16 @@ class MainWindow(QMainWindow):
         normalized_value = max(0, min(100, int(value)))
         self._mic_gate_value_label.setText(f"{normalized_value}%")
         self._controller.set_mic_gate_threshold_percent(normalized_value)
+
+    # Usage: apply the microphone boost slider value to the live meter, gate, and STT stream.
+    # Parameters: value - the slider value in tenths of a multiplier (10 means 1.0x).
+    # Return: None.
+    def _handle_mic_gain_slider_changed(self, value: int) -> None:
+        """Reflect the latest microphone boost multiplier in the UI immediately."""
+
+        gain_multiplier = max(10, min(100, int(value))) / 10.0
+        self._mic_gain_value_label.setText(f"{gain_multiplier:.1f}x")
+        self._controller.set_mic_gain(gain_multiplier)
 
     # Usage: persist the current form values and write the managed PipeWire virtual microphone config file.
     # Parameters: none.

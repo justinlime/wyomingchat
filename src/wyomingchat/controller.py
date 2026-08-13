@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
@@ -13,6 +14,7 @@ from .audio_types import AudioFormatSpec, describe_audio_format
 from .clients import SpeechToTextSession, TextToSpeechSession, TtsVoiceQuerySession
 from .config import AppConfig, ServiceEndpoint, TtsVoiceConfig, build_default_config
 from .constants import (
+    MAX_MIC_GAIN,
     STATE_ERROR,
     STATE_IDLE,
     STATE_LISTENING,
@@ -24,15 +26,29 @@ from .pipewire import build_virtual_microphone_sink_node_name, install_virtual_m
 from .platforms import is_linux, virtual_mic_mode
 from .routing import build_tts_output_device_ids
 from .storage import JsonConfigStore
+from .streaming import StreamingTranscriptChunker
 from .virtual_cable import output_device_pairs, select_cable_output_id
 from .vad import (
     OpenMicVoiceDetector,
+    amplify_pcm_chunk,
     build_stt_audio_format,
     convert_audio_chunk_for_stt,
     measure_pcm_level,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _SentenceAudioUnit:
+    """Hold one synthesized transcript sentence and its buffered audio awaiting playback."""
+
+    text: str
+    format_spec: AudioFormatSpec | None = None
+    audio: bytearray = field(default_factory=bytearray)
+    complete: bool = False
+    played: bool = False
+    failed: bool = False
 
 
 class BridgeController(QObject):
@@ -60,10 +76,10 @@ class BridgeController(QObject):
     _stt_final_received = Signal(int, str)
     _stt_error_received = Signal(int, str)
     _stt_complete_received = Signal(int)
-    _tts_audio_start_received = Signal(int, object)
-    _tts_audio_chunk_received = Signal(int, bytes)
-    _tts_error_received = Signal(int, str)
-    _tts_complete_received = Signal(int)
+    _sentence_audio_start_received = Signal(object, object)
+    _sentence_audio_chunk_received = Signal(object, bytes)
+    _sentence_audio_complete_received = Signal(object)
+    _sentence_error_received = Signal(object, str)
 
     # Usage: create the bridge controller and wire together persistence, audio monitoring, and playback services.
     # Parameters: store - configuration persistence service; catalog - audio device catalog; capture - microphone capture helper; player - multi-output playback helper; parent - optional QObject parent.
@@ -86,7 +102,6 @@ class BridgeController(QObject):
         self._config = build_default_config()
         self._state = STATE_IDLE
         self._stt_session: SpeechToTextSession | None = None
-        self._tts_session: TextToSpeechSession | None = None
         self._tts_voice_query_session: TtsVoiceQuerySession | None = None
         self._voice_detector: OpenMicVoiceDetector | None = None
         self._capture_format_spec: AudioFormatSpec | None = None
@@ -94,9 +109,15 @@ class BridgeController(QObject):
         self._available_tts_voices: list[TtsVoiceConfig] = []
         self._tts_voice_query_generation = 0
         self._stt_generation = 0
-        self._tts_generation = 0
         self._latest_final_transcript = ""
         self._pending_tts_text: str | None = None
+        self._synthesis_sessions: list[TextToSpeechSession] = []
+        self._sentence_units: list[_SentenceAudioUnit] = []
+        self._current_unit_index = -1
+        self._next_unit_to_play = 0
+        self._chunker: StreamingTranscriptChunker | None = None
+        self._listening_finished = False
+        self._synthesis_aborted = False
         self._monitor_cooldown_until = 0.0
         self._connect_components()
 
@@ -137,10 +158,10 @@ class BridgeController(QObject):
         self._stt_final_received.connect(self._apply_final_transcript)
         self._stt_error_received.connect(self._handle_stt_error)
         self._stt_complete_received.connect(self._handle_stt_complete)
-        self._tts_audio_start_received.connect(self._handle_tts_audio_start)
-        self._tts_audio_chunk_received.connect(self._handle_tts_audio_chunk)
-        self._tts_error_received.connect(self._handle_tts_error)
-        self._tts_complete_received.connect(self._handle_tts_complete)
+        self._sentence_audio_start_received.connect(self._handle_sentence_audio_start)
+        self._sentence_audio_chunk_received.connect(self._handle_sentence_audio_chunk)
+        self._sentence_audio_complete_received.connect(self._handle_sentence_audio_complete)
+        self._sentence_error_received.connect(self._handle_sentence_error)
 
     # Usage: load configuration from disk, emit it to the UI, and start the always-on microphone monitor.
     # Parameters: none.
@@ -249,6 +270,14 @@ class BridgeController(QObject):
         if self._voice_detector is not None:
             self._voice_detector.set_start_level_threshold(normalized_threshold / 100.0)
 
+    # Usage: apply a new microphone boost multiplier immediately so the live meter, gate, and STT stream reflect the slider in real time.
+    # Parameters: gain_multiplier - the linear boost multiplier (1.0x means no boost).
+    # Return: None.
+    def set_mic_gain(self, gain_multiplier: float) -> None:
+        """Update the live microphone boost multiplier for the next audio chunks."""
+
+        self._config.mic_gain = max(1.0, min(MAX_MIC_GAIN, float(gain_multiplier)))
+
     # Usage: cleanly shut down background services when the application exits.
     # Parameters: none.
     # Return: None.
@@ -355,17 +384,21 @@ class BridgeController(QObject):
         """Immediately stop active network/playback work and optionally stop microphone capture."""
 
         self._stt_generation += 1
-        self._tts_generation += 1
         self._pending_tts_text = None
+        self._synthesis_aborted = True
 
         if self._stt_session is not None:
             self._stt_session.close()
             self._stt_session.wait_closed()
             self._stt_session = None
-        if self._tts_session is not None:
-            self._tts_session.close()
-            self._tts_session.wait_closed()
-            self._tts_session = None
+        for session in self._synthesis_sessions:
+            session.close()
+            session.wait_closed()
+        self._synthesis_sessions.clear()
+        self._sentence_units.clear()
+        self._current_unit_index = -1
+        self._next_unit_to_play = 0
+        self._chunker = None
 
         self._player.stop_stream()
         if self._voice_detector is not None:
@@ -391,6 +424,9 @@ class BridgeController(QObject):
 
         if self._voice_detector is None or not chunk:
             return
+
+        if self._capture_format_spec is not None and self._config.mic_gain > 1.0:
+            chunk = amplify_pcm_chunk(chunk, self._capture_format_spec, self._config.mic_gain)
 
         chunk_level = 0.0
         if self._capture_format_spec is not None:
@@ -447,6 +483,13 @@ class BridgeController(QObject):
         self.final_transcript_changed.emit("")
         self._latest_final_transcript = ""
         self._pending_tts_text = None
+        self._synthesis_sessions = []
+        self._sentence_units = []
+        self._current_unit_index = -1
+        self._next_unit_to_play = 0
+        self._listening_finished = False
+        self._synthesis_aborted = False
+        self._chunker = StreamingTranscriptChunker()
 
         self._stt_generation += 1
         stt_generation = self._stt_generation
@@ -481,6 +524,14 @@ class BridgeController(QObject):
         if self._state in {STATE_LISTENING, STATE_TRANSCRIBING}:
             self.status_changed.emit("Receiving transcript updates...")
 
+        # Streaming synthesis: confirm completed sentences as partials arrive and
+        # synthesize them immediately so the TTS server works while the user is
+        # still speaking the rest of the utterance.
+        if self._config.streaming_synthesis and self._chunker is not None:
+            if self._state in {STATE_LISTENING, STATE_TRANSCRIBING}:
+                for sentence in self._chunker.consume_partial(text):
+                    self._start_sentence_synthesis(sentence)
+
     # Usage: apply the final STT transcript from the active session, persist it, and queue TTS to start after STT fully closes.
     # Parameters: generation - the STT session generation that produced the transcript; text - the final transcript returned by the STT server.
     # Return: None.
@@ -505,52 +556,62 @@ class BridgeController(QObject):
         self._pending_tts_text = normalized_text
         self.status_changed.emit("Transcription complete. Preparing speech synthesis...")
 
-    # Usage: react after the active STT worker has fully completed and decide whether TTS or idle should follow.
+    # Usage: react after the active STT worker has fully completed, finalize the streaming chunker, and start sentence playback.
     # Parameters: generation - the STT session generation that completed.
     # Return: None.
     def _handle_stt_complete(self, generation: int) -> None:
-        """Finalize STT cleanup after the active session worker has exited."""
+        """Finalize STT cleanup and drive the ordered sentence synthesis/playback flow."""
 
         if generation != self._stt_generation:
             return
 
         self._stt_session = None
+        self._listening_finished = True
         self.listening_changed.emit(False)
-        if self._pending_tts_text:
-            queued_tts_text = self._pending_tts_text
-            self._pending_tts_text = None
-            self._start_tts(queued_tts_text)
+
+        final_text = self._pending_tts_text
+        self._pending_tts_text = None
+
+        if self._config.streaming_synthesis and self._chunker is not None and final_text:
+            for sentence in self._chunker.finish(final_text):
+                self._start_sentence_synthesis(sentence)
+        elif final_text:
+            self._start_sentence_synthesis(final_text)
+
+        if not self._sentence_units:
+            self._set_state(STATE_IDLE)
+            self.status_changed.emit("No speech was transcribed")
             return
 
-        self._set_state(STATE_IDLE)
-        self.status_changed.emit("Open microphone is active and waiting for speech")
-
-    # Usage: start a TTS request for the given transcript text and scope callbacks to the active synthesis session only.
-    # Parameters: text - the transcript text that should be spoken aloud.
-    # Return: None.
-    def _start_tts(self, text: str) -> None:
-        """Start a TTS request for the provided transcript text."""
-
-        if self._tts_session is not None:
-            return
-
-        self._tts_generation += 1
-        tts_generation = self._tts_generation
         self._set_state(STATE_SYNTHESIZING)
-        self.status_changed.emit("Requesting speech synthesis...")
-        self._tts_session = TextToSpeechSession(
-            endpoint=self._config.tts_endpoint,
-            text=text,
-            voice=self._config.tts_voice,
-            on_audio_start=lambda format_spec, generation=tts_generation: self._tts_audio_start_received.emit(generation, format_spec),
-            on_audio_chunk=lambda audio_chunk, generation=tts_generation: self._tts_audio_chunk_received.emit(generation, audio_chunk),
-            on_error=lambda message, generation=tts_generation: self._tts_error_received.emit(generation, message),
-            on_complete=lambda generation=tts_generation: self._tts_complete_received.emit(generation),
-        )
+        self.status_changed.emit("Synthesizing speech...")
+        self._maybe_start_playback()
+
+    # Usage: start a Wyoming TTS request for one transcript sentence and buffer its streamed audio.
+    # Parameters: text - the sentence text that should be synthesized.
+    # Return: None.
+    def _start_sentence_synthesis(self, text: str) -> None:
+        """Synthesize one transcript sentence and stage its audio for ordered playback."""
+
+        if self._synthesis_aborted or not text.strip():
+            return
+
+        unit = _SentenceAudioUnit(text=text)
+        self._sentence_units.append(unit)
         try:
-            self._tts_session.start()
+            session = TextToSpeechSession(
+                endpoint=self._config.tts_endpoint,
+                text=text,
+                voice=self._config.tts_voice,
+                on_audio_start=lambda format_spec, u=unit: self._sentence_audio_start_received.emit(u, format_spec),
+                on_audio_chunk=lambda audio_chunk, u=unit: self._sentence_audio_chunk_received.emit(u, audio_chunk),
+                on_error=lambda message, u=unit: self._sentence_error_received.emit(u, message),
+                on_complete=lambda u=unit: self._sentence_audio_complete_received.emit(u),
+            )
+            session.start()
+            self._synthesis_sessions.append(session)
         except Exception as exc:  # noqa: BLE001 - surface any startup failure to the user.
-            self._tts_session = None
+            unit.failed = True
             self._handle_error(f"Failed to start synthesis: {exc}")
 
     # Usage: resolve the Qt playback output id used as the virtual microphone target for the current platform.
@@ -593,14 +654,94 @@ class BridgeController(QObject):
         # macOS and other platforms have no supported virtual-microphone target.
         return None
 
-    # Usage: prepare output sinks when the active TTS session announces the PCM audio format.
-    # Parameters: generation - the TTS session generation that produced the format; format_spec - the raw PCM format of the incoming synthesized audio.
+    # Usage: record the PCM format of a synthesized sentence and start playback when it becomes the active unit.
+    # Parameters: unit - the sentence unit that produced the format; format_spec - the raw PCM format of the synthesized audio.
     # Return: None.
-    def _handle_tts_audio_start(self, generation: int, format_spec: AudioFormatSpec) -> None:
-        """Create output sinks for the incoming TTS audio stream from the active session only."""
+    def _handle_sentence_audio_start(self, unit: _SentenceAudioUnit, format_spec: AudioFormatSpec) -> None:
+        """Store the sentence audio format and attempt playback when it is next in line."""
 
-        if generation != self._tts_generation:
+        if self._synthesis_aborted or unit.failed:
             return
+
+        unit.format_spec = format_spec
+        self._maybe_start_playback()
+
+    # Usage: forward streamed sentence audio to the player or buffer it until its unit plays.
+    # Parameters: unit - the sentence unit that produced the chunk; chunk - raw PCM bytes from the TTS server.
+    # Return: None.
+    def _handle_sentence_audio_chunk(self, unit: _SentenceAudioUnit, chunk: bytes) -> None:
+        """Write or buffer one synthesized sentence audio chunk."""
+
+        if self._synthesis_aborted or unit.failed or not chunk:
+            return
+
+        if unit is self._current_sentence_unit():
+            self._player.write_audio(chunk)
+        else:
+            unit.audio.extend(chunk)
+
+    # Usage: mark a sentence complete and drain or advance playback accordingly.
+    # Parameters: unit - the sentence unit that finished synthesizing.
+    # Return: None.
+    def _handle_sentence_audio_complete(self, unit: _SentenceAudioUnit) -> None:
+        """Mark the sentence synthesis complete and let playback drain or advance."""
+
+        if self._synthesis_aborted:
+            return
+
+        unit.complete = True
+        if unit is self._current_sentence_unit():
+            self._player.finish_stream()
+        else:
+            self._maybe_start_playback()
+
+    # Usage: surface a synthesis failure for one sentence without discarding the other queued sentences.
+    # Parameters: unit - the sentence unit that failed; message - the human-readable error message.
+    # Return: None.
+    def _handle_sentence_error(self, unit: _SentenceAudioUnit, message: str) -> None:
+        """Mark the sentence failed and surface a recoverable error message."""
+
+        if self._synthesis_aborted:
+            return
+
+        unit.failed = True
+        self.error_changed.emit(str(message))
+        self.status_changed.emit(str(message))
+        if not any(not candidate.failed for candidate in self._sentence_units):
+            self._handle_error(message)
+
+    # Usage: identify the sentence unit currently feeding the playback sinks.
+    # Parameters: none.
+    # Return: the active unit, or None when nothing is playing.
+    def _current_sentence_unit(self) -> _SentenceAudioUnit | None:
+        """Return the sentence unit currently playing, or None."""
+
+        if 0 <= self._current_unit_index < len(self._sentence_units):
+            return self._sentence_units[self._current_unit_index]
+        return None
+
+    # Usage: start playback of the next ready sentence once listening has ended.
+    # Parameters: none.
+    # Return: None.
+    def _maybe_start_playback(self) -> None:
+        """Start playing the next sentence unit when listening is done and its audio format is known."""
+
+        if self._synthesis_aborted:
+            return
+        if not self._listening_finished:
+            return
+        if self._current_unit_index >= 0:
+            return
+        if self._next_unit_to_play >= len(self._sentence_units):
+            return
+
+        unit = self._sentence_units[self._next_unit_to_play]
+        if unit.failed:
+            self._next_unit_to_play += 1
+            self._maybe_start_playback()
+            return
+        if unit.format_spec is None:
+            return  # wait for the sentence's audio-start event
 
         output_device_ids = build_tts_output_device_ids(
             self._config.audio.output_device_ids,
@@ -612,45 +753,36 @@ class BridgeController(QObject):
             )
             return
 
-        started_outputs = self._player.start_stream(output_device_ids, format_spec)
+        started_outputs = self._player.start_stream(output_device_ids, unit.format_spec)
         if started_outputs <= 0:
             self._handle_error("No compatible playback device could be opened for TTS output")
             return
 
+        self._current_unit_index = self._next_unit_to_play
+        self._next_unit_to_play += 1
+        buffered_audio = bytes(unit.audio)
+        unit.audio.clear()
+        if buffered_audio:
+            self._player.write_audio(buffered_audio)
+        if unit.complete:
+            self._player.finish_stream()
         self._set_state(STATE_SPEAKING)
         self.status_changed.emit("Playing synthesized audio...")
 
-    # Usage: forward each synthesized PCM chunk from the active TTS session to the playback helper.
-    # Parameters: generation - the TTS session generation that produced the chunk; chunk - raw PCM bytes received from the Wyoming TTS server.
-    # Return: None.
-    def _handle_tts_audio_chunk(self, generation: int, chunk: bytes) -> None:
-        """Write streamed TTS audio chunks from the active session to the playback sinks."""
-
-        if generation != self._tts_generation:
-            return
-
-        self._player.write_audio(chunk)
-
-    # Usage: finalize TTS cleanup after the active synthesis worker completes and let playback drain naturally.
-    # Parameters: generation - the TTS session generation that completed.
-    # Return: None.
-    def _handle_tts_complete(self, generation: int) -> None:
-        """Mark the active TTS request complete and let playback drain if needed."""
-
-        if generation != self._tts_generation:
-            return
-
-        self._tts_session = None
-        self._player.finish_stream()
-        if self._state == STATE_SYNTHESIZING:
-            self._set_state(STATE_IDLE)
-            self.status_changed.emit("Open microphone is active and waiting for speech")
-
-    # Usage: return the application to idle after all playback sinks have drained and stopped.
+    # Usage: return the application to the next queued sentence or to idle after all playback drains.
     # Parameters: none.
     # Return: None.
     def _handle_playback_finished(self) -> None:
-        """Return the controller to idle after playback finishes."""
+        """Advance to the next queued sentence or return the controller to idle."""
+
+        if self._current_unit_index >= 0 and self._current_unit_index < len(self._sentence_units):
+            self._sentence_units[self._current_unit_index].played = True
+        self._current_unit_index = -1
+
+        if self._next_unit_to_play < len(self._sentence_units):
+            self._set_state(STATE_SYNTHESIZING)
+            self._maybe_start_playback()
+            return
 
         if self._state in {STATE_SPEAKING, STATE_SYNTHESIZING}:
             self._monitor_cooldown_until = time.monotonic() + 0.35
@@ -666,17 +798,6 @@ class BridgeController(QObject):
         """Forward an STT error from the active session only."""
 
         if generation != self._stt_generation:
-            return
-
-        self._handle_error(message)
-
-    # Usage: forward a TTS error from the active session only, ignoring stale callbacks from older sessions.
-    # Parameters: generation - the TTS session generation that produced the error; message - the human-readable error message.
-    # Return: None.
-    def _handle_tts_error(self, generation: int, message: str) -> None:
-        """Forward a TTS error from the active session only."""
-
-        if generation != self._tts_generation:
             return
 
         self._handle_error(message)

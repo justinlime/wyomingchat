@@ -11,6 +11,7 @@ from wyomingchat.constants import DEFAULT_VAD_STOP_SILENCE_FRAMES
 from wyomingchat.vad import (
     OpenMicVoiceDetector,
     SileroSpeechDetector,
+    amplify_pcm_chunk,
     build_stt_audio_format,
     convert_audio_chunk_for_stt,
     measure_pcm_level,
@@ -263,11 +264,11 @@ def test_open_mic_voice_detector_uses_pre_roll_when_speech_starts() -> None:
     assert decisions[-1].audio_chunks == [frames[2], frames[3]]
 
 
-# Usage: verify that the detector trims leading non-speech from pre-roll before it forwards a newly detected utterance.
+# Usage: verify that the detector forwards the complete pre-roll buffer when speech starts so gradual onsets are never clipped.
 # Parameters: none.
 # Return: None.
-def test_open_mic_voice_detector_trims_leading_non_speech_from_pre_roll() -> None:
-    """Ensure only the speech-confirmed suffix of the pre-roll is forwarded when streaming starts."""
+def test_open_mic_voice_detector_forwards_full_pre_roll_when_speech_starts() -> None:
+    """Ensure the full buffered pre-roll is forwarded even when it contains leading non-speech frames."""
 
     detector = OpenMicVoiceDetector(
         audio_format=AudioFormatSpec(rate=16000, width=2, channels=1),
@@ -288,7 +289,7 @@ def test_open_mic_voice_detector_trims_leading_non_speech_from_pre_roll() -> Non
     assert first.should_start_stream is False
     assert second.should_start_stream is False
     assert third.should_start_stream is True
-    assert third.audio_chunks == [frames[1], frames[2]]
+    assert third.audio_chunks == [frames[0], frames[1], frames[2]]
 
 
 # Usage: verify that non-zero speech padding preserves a small amount of leading context before the first speech-confirmed frame so the first word is less likely to be clipped.
@@ -342,11 +343,11 @@ def test_open_mic_voice_detector_starts_as_soon_as_trigger_frames_are_met() -> N
     assert decisions[2].should_start_stream is True
 
 
-# Usage: verify that the pre-roll trimming logic ignores stale older speech-positive frames that are no longer part of the current rolling start window.
+# Usage: verify that the pre-roll forwards its full buffer regardless of where older speech-positive frames fall, so no earlier onset audio is dropped.
 # Parameters: none.
 # Return: None.
-def test_open_mic_voice_detector_trims_from_current_start_window_only() -> None:
-    """Ensure start-time pre-roll trimming does not forward silence anchored by stale earlier speech."""
+def test_open_mic_voice_detector_forwards_full_pre_roll_ignoring_stale_window_position() -> None:
+    """Ensure the complete pre-roll buffer is forwarded even when older speech frames are outside the current start window."""
 
     detector = OpenMicVoiceDetector(
         audio_format=AudioFormatSpec(rate=16000, width=2, channels=1),
@@ -363,7 +364,7 @@ def test_open_mic_voice_detector_trims_from_current_start_window_only() -> None:
     decisions = [detector.process_audio_chunk(frame) for frame in frames]
 
     assert decisions[-1].should_start_stream is True
-    assert decisions[-1].audio_chunks == [frames[3], frames[4]]
+    assert decisions[-1].audio_chunks == [frames[0], frames[1], frames[2], frames[3], frames[4]]
 
 
 # Usage: verify that the VAD state machine stops an utterance only after the configured amount of trailing silence, while dropping that trailing silence instead of forwarding it to STT when explicit trailing padding is disabled.
@@ -524,3 +525,69 @@ def test_open_mic_voice_detector_reset_clears_pending_state() -> None:
     assert fake_detector.reset_calls == 1
     assert start_decision.should_start_stream is False
     assert final_decision.should_start_stream is True
+
+
+# Usage: verify that the speech-oriented level blends peak energy so quiet speech reads higher than pure RMS.
+# Parameters: none.
+# Return: None.
+def test_measure_pcm_level_blends_peak_for_speech_like_frames() -> None:
+    """Ensure high-crest (speech-like) frames register clearly on the meter."""
+
+    # A mostly-silent frame with one loud sample: RMS is tiny but peak is large.
+    samples = [0] * 511 + [20000]
+    frame = array("h", samples).tobytes()
+    format_spec = AudioFormatSpec(rate=16000, width=2, channels=1)
+
+    level = measure_pcm_level(frame, format_spec)
+
+    # max(rms, peak * 0.5) = max(~0.03, 0.31)
+    assert round(level, 2) == 0.31
+
+
+# Usage: verify that int16 microphone chunks are amplified by the requested gain with clipping protection.
+# Parameters: none.
+# Return: None.
+def test_amplify_pcm_chunk_boosts_int16_and_clips() -> None:
+    """Ensure int16 chunks scale by the gain and clamp at full scale."""
+
+    format_spec = AudioFormatSpec(rate=16000, width=2, channels=1)
+
+    boosted = amplify_pcm_chunk(build_pcm_frame(16384), format_spec, 1.5)
+    assert round(measure_pcm_level(boosted, format_spec), 2) == 0.75
+
+    clipped = amplify_pcm_chunk(build_pcm_frame(16384), format_spec, 2.0)
+    assert round(measure_pcm_level(clipped, format_spec), 2) == 1.0
+
+
+# Usage: verify that float32 microphone chunks are amplified and clamped to the normalized range.
+# Parameters: none.
+# Return: None.
+def test_amplify_pcm_chunk_boosts_float32_and_clamps() -> None:
+    """Ensure float32 chunks scale by the gain and clamp at unity."""
+
+    format_spec = AudioFormatSpec(
+        rate=16000,
+        width=4,
+        channels=1,
+        sample_format=PCM_SAMPLE_FORMAT_FLOAT32,
+    )
+
+    boosted = amplify_pcm_chunk(build_float32_frame(0.4), format_spec, 2.0)
+    assert round(measure_pcm_level(boosted, format_spec), 2) == 0.8
+
+    clamped = amplify_pcm_chunk(build_float32_frame(0.8), format_spec, 2.0)
+    assert round(measure_pcm_level(clamped, format_spec), 2) == 1.0
+
+
+# Usage: verify that gain at or below unity leaves the chunk untouched.
+# Parameters: none.
+# Return: None.
+def test_amplify_pcm_chunk_leaves_unchanged_without_boost() -> None:
+    """Ensure a gain of 1.0 or lower passes the chunk through unchanged."""
+
+    format_spec = AudioFormatSpec(rate=16000, width=2, channels=1)
+    frame = build_pcm_frame(16384)
+
+    assert amplify_pcm_chunk(frame, format_spec, 1.0) == frame
+    assert amplify_pcm_chunk(frame, format_spec, 0.5) == frame
+    assert amplify_pcm_chunk(b"", format_spec, 2.0) == b""

@@ -200,13 +200,96 @@ def calculate_rms_level(samples: list[int]) -> float:
     return min(1.0, (mean_square ** 0.5) / 32767.0)
 
 
-# Usage: measure the normalized RMS level of an arbitrary raw PCM chunk using the same sample conversion rules as the speech-detection pipeline.
-# Parameters: frame - raw PCM bytes from Qt capture; format_spec - the PCM format used to decode the frame.
-# Return: a floating-point RMS level where 0.0 is silence and 1.0 is full-scale PCM.
-def measure_pcm_level(frame: bytes, format_spec: AudioFormatSpec) -> float:
-    """Return a normalized RMS level for a raw PCM chunk."""
+# Usage: calculate the normalized peak level of mono int16 PCM samples.
+# Parameters: samples - mono signed 16-bit PCM samples.
+# Return: a floating-point peak level where 0.0 is silence and 1.0 is full-scale PCM.
+def calculate_peak_level(samples: list[int]) -> float:
+    """Return a normalized peak level for mono int16 PCM samples."""
 
-    return calculate_rms_level(pcm_frame_to_mono_int16(frame, format_spec))
+    if not samples:
+        return 0.0
+
+    peak = max(abs(sample) for sample in samples)
+    return min(1.0, peak / 32767.0)
+
+
+# Usage: compute a speech-oriented level that blends RMS with a fraction of the peak so quiet speech reads more clearly.
+# Parameters: samples - mono signed 16-bit PCM samples.
+# Return: a floating-point level where 0.0 is silence and 1.0 is full-scale PCM.
+def calculate_speech_level(samples: list[int]) -> float:
+    """Return a normalized speech-oriented level that blends RMS with peak.
+
+    Pure RMS reads very low for real speech because utterances have high crest
+    factors (loud peaks over a modest average), which makes meters and gates
+    feel insensitive. Blending in a fraction of the peak level keeps noise
+    floors stable while making voiced speech register much more clearly.
+    """
+
+    if not samples:
+        return 0.0
+
+    rms_level = calculate_rms_level(samples)
+    peak_level = calculate_peak_level(samples)
+    return max(rms_level, peak_level * 0.5)
+
+
+# Usage: measure the normalized speech-oriented level of an arbitrary raw PCM chunk using the same sample conversion rules as the speech-detection pipeline.
+# Parameters: frame - raw PCM bytes from Qt capture; format_spec - the PCM format used to decode the frame.
+# Return: a floating-point level where 0.0 is silence and 1.0 is full-scale PCM.
+def measure_pcm_level(frame: bytes, format_spec: AudioFormatSpec) -> float:
+    """Return a normalized speech-oriented level for a raw PCM chunk."""
+
+    return calculate_speech_level(pcm_frame_to_mono_int16(frame, format_spec))
+
+
+# Usage: scale a raw PCM chunk by a gain multiplier while preserving its exact sample format.
+# Parameters: chunk - raw PCM bytes from Qt capture; format_spec - the PCM format that describes the chunk; gain - the linear gain multiplier (1.0 means unchanged).
+# Return: the amplified PCM bytes in the original format, clamped to the format's native range.
+def amplify_pcm_chunk(chunk: bytes, format_spec: AudioFormatSpec, gain: float) -> bytes:
+    """Return a raw PCM chunk scaled by a gain multiplier in its original format.
+
+    A gain above 1.0 boosts quiet microphones before VAD analysis, level
+    metering, and STT streaming. Sample values are clamped to the format's
+    native range so the boosted signal cannot overflow.
+    """
+
+    if gain <= 1.0 or not chunk:
+        return chunk
+
+    if format_spec.sample_format == PCM_SAMPLE_FORMAT_FLOAT32:
+        raw_samples = array("f")
+        raw_samples.frombytes(chunk)
+        scaled_samples = array(
+            "f",
+            (max(-1.0, min(1.0, sample * gain)) for sample in raw_samples),
+        )
+        return scaled_samples.tobytes()
+
+    if format_spec.sample_format == PCM_SAMPLE_FORMAT_UINT8 or format_spec.width == 1:
+        scaled = bytearray()
+        for value in chunk:
+            scaled.append(max(0, min(255, round(((value - 128) * gain) + 128))))
+        return bytes(scaled)
+
+    if format_spec.width == 4:
+        raw_samples = array("i")
+        raw_samples.frombytes(chunk)
+        scaled_samples = array(
+            "i",
+            (
+                max(-2147483648, min(2147483647, int(round(sample * gain))))
+                for sample in raw_samples
+            ),
+        )
+        return scaled_samples.tobytes()
+
+    if format_spec.width == 2:
+        raw_samples = array("h")
+        raw_samples.frombytes(chunk)
+        scaled_samples = array("h", (clamp_int16(sample * gain) for sample in raw_samples))
+        return scaled_samples.tobytes()
+
+    return chunk
 
 
 # Usage: resample a mono int16 PCM sample list so the detector can evaluate it at its supported sample rate.
@@ -390,27 +473,18 @@ class OpenMicVoiceDetector:
 
     # Usage: collect the buffered lead-in audio that should be sent when a new STT stream starts, including a small amount of prefix padding before the first speech-confirmed frame inside the current rolling start window.
     # Parameters: none.
-    # Return: a list of raw PCM frames beginning slightly before the first speech-confirmed frame that contributed to the current stream-start decision.
+    # Return: a list of raw PCM frames from the start of the buffered pre-roll through the trigger frame.
     def _collect_start_audio_chunks(self) -> list[bytes]:
-        """Return the padded pre-roll audio that should accompany a newly detected utterance."""
+        """Return the complete buffered pre-roll audio for a newly detected utterance.
 
-        buffered_frames = list(self._pre_roll_frames)
-        start_window_offset = max(0, len(buffered_frames) - self._start_window_frames)
-        window_frames = buffered_frames[start_window_offset:]
-        first_window_speech_index = next(
-            (
-                index
-                for index, analyzed_frame in enumerate(window_frames)
-                if analyzed_frame.counts_as_start_speech
-            ),
-            len(window_frames),
-        )
-        if first_window_speech_index >= len(window_frames):
-            return []
+        The entire pre-roll window is forwarded rather than trimmed back from the
+        first speech-confirmed frame. Speech onsets are often gradual - the first
+        syllable may stay below the start thresholds for a few frames - so trimming
+        from the first qualifying frame could drop the actual beginning of the
+        utterance. Leading silence in the pre-roll is harmless to STT.
+        """
 
-        first_speech_index = start_window_offset + first_window_speech_index
-        padded_start_index = max(0, first_speech_index - self._speech_pad_frames)
-        return [analyzed_frame.frame for analyzed_frame in buffered_frames[padded_start_index:]]
+        return [analyzed_frame.frame for analyzed_frame in self._pre_roll_frames]
 
     # Usage: collect a short tail of buffered non-speech frames that should still be sent when an utterance ends so STT receives a natural trailing pad instead of an abrupt cutoff.
     # Parameters: none.
