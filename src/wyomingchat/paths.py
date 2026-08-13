@@ -1,35 +1,58 @@
-"""Helpers for locating XDG configuration and state paths for the application."""
+"""Helpers for locating platform-appropriate configuration and state paths for the application."""
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from .constants import CONFIG_DIR_NAME, CONFIG_FILE_NAME, LOG_FILE_NAME
 
 
-# Usage: resolve the base XDG config directory for the current user.
+# Usage: resolve the base configuration directory for the current user and platform.
 # Parameters: none.
 # Return: a Path pointing at the directory that should contain app configuration.
 def get_config_home() -> Path:
-    """Return the user's XDG config home directory."""
+    """Return the user's base configuration directory.
+
+    On Linux this honors XDG_CONFIG_HOME and falls back to ~/.config. On
+    Windows it uses the roaming %APPDATA% directory so settings follow the
+    user across machines in domain environments.
+    """
 
     configured_path = os.environ.get("XDG_CONFIG_HOME")
     if configured_path:
         return Path(configured_path)
 
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata)
+        return Path.home() / "AppData" / "Roaming"
+
     return Path.home() / ".config"
 
 
-# Usage: resolve the base XDG state directory for the current user.
+# Usage: resolve the base state directory for the current user and platform.
 # Parameters: none.
 # Return: a Path pointing at the directory that should contain app state and logs.
 def get_state_home() -> Path:
-    """Return the user's XDG state home directory."""
+    """Return the user's base state directory.
+
+    On Linux this honors XDG_STATE_HOME and falls back to ~/.local/state. On
+    Windows it uses the local %LOCALAPPDATA% directory so logs and transient
+    state stay on the local machine.
+    """
 
     configured_path = os.environ.get("XDG_STATE_HOME")
     if configured_path:
         return Path(configured_path)
+
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata)
+        return Path.home() / "AppData" / "Local"
 
     return Path.home() / ".local" / "state"
 
@@ -70,7 +93,7 @@ def get_log_file_path() -> Path:
     return get_app_state_dir() / LOG_FILE_NAME
 
 
-# Usage: create the app's XDG config and state directories before reading or writing files.
+# Usage: create the app's config and state directories before reading or writing files.
 # Parameters: none.
 # Return: a tuple containing the created config directory and state directory Paths.
 def ensure_app_directories() -> tuple[Path, Path]:

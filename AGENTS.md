@@ -2,10 +2,12 @@
 
 ## Overview
 
-Wyoming Voice Bridge is a lightweight, open-source Linux desktop application that keeps an
+Wyoming Voice Bridge is a lightweight, open-source desktop application that keeps an
 always-on local microphone monitor running, detects speech automatically, and bridges that speech
 to locally hosted Wyoming-compatible STT and TTS services. The application is written in Python,
-uses Qt for the desktop interface, and is designed for modern Linux desktops with PipeWire.
+uses Qt for the desktop interface, and is designed for modern Linux desktops with PipeWire. The
+application also runs on Windows (from source or as a standalone PyInstaller EXE); the managed
+PipeWire virtual microphone feature is Linux-only.
 
 The project is **Nix-first** for local execution and testing. The primary way to run the project is
 through `flake.nix`, using commands such as `nix run .#`, `nix build .#`, and

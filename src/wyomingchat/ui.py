@@ -36,6 +36,8 @@ from .config import (
 )
 from .constants import APP_NAME
 from .controller import BridgeController
+from .platforms import platform_label, virtual_mic_mode
+from .virtual_cable import cable_mic_name_for_output, detect_cable_outputs, output_device_pairs
 
 
 class MainWindow(QMainWindow):
@@ -70,7 +72,11 @@ class MainWindow(QMainWindow):
 
         self._state_label = QLabel("State: idle")
         self._monitoring_status_label = QLabel("Open microphone: inactive")
-        self._virtual_mic_status_label = QLabel("Virtual microphone: not configured")
+        self._virtual_mic_status_label = QLabel(
+            "Virtual microphone: not configured"
+            if virtual_mic_mode() is not None
+            else "Virtual microphone: not supported on this platform"
+        )
         layout.addWidget(self._state_label)
         layout.addWidget(self._monitoring_status_label)
         layout.addWidget(self._virtual_mic_status_label)
@@ -199,14 +205,36 @@ class MainWindow(QMainWindow):
         layout.addRow(helper)
         return group
 
-    # Usage: build the UI section containing PipeWire virtual microphone settings and actions.
+    # Usage: build the UI section containing virtual microphone settings and actions for the current platform.
     # Parameters: none.
-    # Return: a QGroupBox containing virtual microphone fields and the install action.
+    # Return: a QGroupBox containing the virtual microphone fields and actions.
     def _build_virtual_microphone_group(self) -> QGroupBox:
-        """Create the PipeWire virtual microphone configuration section."""
+        """Create the virtual microphone configuration section for this platform."""
 
-        group = QGroupBox("PipeWire Virtual Microphone")
+        mic_mode = virtual_mic_mode()
+        group_title = "PipeWire Virtual Microphone" if mic_mode == "pipewire" else "Virtual Microphone"
+        group = QGroupBox(group_title)
         layout = QFormLayout(group)
+
+        if mic_mode == "pipewire":
+            self._build_pipewire_virtual_mic_form(layout)
+        elif mic_mode == "cable":
+            self._build_cable_virtual_mic_form(layout)
+        else:
+            unsupported_note = QLabel(
+                f"The virtual microphone feature is not supported on {platform_label()}. "
+                f"Select a normal speaker or headphone output for synthesized speech instead."
+            )
+            unsupported_note.setWordWrap(True)
+            layout.addRow(unsupported_note)
+
+        return group
+
+    # Usage: build the Linux/PipeWire virtual microphone form fields and actions.
+    # Parameters: layout - the QFormLayout that should receive the PipeWire widgets.
+    # Return: None.
+    def _build_pipewire_virtual_mic_form(self, layout: QFormLayout) -> None:
+        """Create the PipeWire loopback configuration form used on Linux."""
 
         self._virtual_mic_enabled_checkbox = QCheckBox("Manage a PipeWire virtual microphone sink")
         self._virtual_mic_node_name_edit = QLineEdit()
@@ -226,7 +254,45 @@ class MainWindow(QMainWindow):
         layout.addRow("Description", self._virtual_mic_description_edit)
         layout.addRow("Install/update", self._install_virtual_mic_button)
         layout.addRow(helper)
-        return group
+
+    # Usage: build the Windows virtual audio cable form fields and actions.
+    # Parameters: layout - the QFormLayout that should receive the cable widgets.
+    # Return: None.
+    def _build_cable_virtual_mic_form(self, layout: QFormLayout) -> None:
+        """Create the virtual audio cable routing form used on Windows."""
+
+        self._virtual_mic_enabled_checkbox = QCheckBox("Route synthesized TTS into a virtual audio cable as a microphone")
+        self._virtual_cable_combo = QComboBox()
+        self._refresh_cables_button = QPushButton("Refresh Cables")
+        self._refresh_cables_button.clicked.connect(self._handle_refresh_cables_clicked)
+
+        cable_row = QWidget()
+        cable_layout = QHBoxLayout(cable_row)
+        cable_layout.setContentsMargins(0, 0, 0, 0)
+        cable_layout.addWidget(self._virtual_cable_combo, stretch=1)
+        cable_layout.addWidget(self._refresh_cables_button)
+
+        helper = QLabel(
+            "Install a free virtual audio cable once - VB-CABLE (free donationware, vb-audio.com/Cable) "
+            "or Voicemeeter (free, vb-audio.com/Voicemeeter) - then enable this option. "
+            "The app plays TTS into the cable's playback endpoint, and the cable's paired microphone endpoint becomes "
+            "selectable in other applications. The virtual microphone carries only the app's synthesized TTS output, "
+            "not your live microphone audio."
+        )
+        helper.setWordWrap(True)
+
+        layout.addRow("Enabled", self._virtual_mic_enabled_checkbox)
+        layout.addRow("Cable playback endpoint", cable_row)
+        layout.addRow(helper)
+
+    # Usage: refresh audio device metadata and repopulate the virtual cable selector.
+    # Parameters: none.
+    # Return: None.
+    def _handle_refresh_cables_clicked(self) -> None:
+        """Refresh detected virtual audio cables after the user installs or updates a cable driver."""
+
+        self._loaded_config = self.collect_config_from_form()
+        self._controller.refresh_devices()
 
     # Usage: build the section that exposes save, refresh, and PipeWire management actions.
     # Parameters: none.
@@ -304,15 +370,63 @@ class MainWindow(QMainWindow):
         self._refresh_tts_voice_combo(config.tts_voice)
         self._set_mic_gate_threshold(config.mic_gate_threshold_percent)
         self._virtual_mic_enabled_checkbox.setChecked(config.virtual_microphone.enabled)
-        self._virtual_mic_node_name_edit.setText(config.virtual_microphone.node_name)
-        self._virtual_mic_description_edit.setText(config.virtual_microphone.description)
-        self._virtual_mic_status_label.setText(
-            "Virtual microphone: enabled in configuration"
-            if config.virtual_microphone.enabled
-            else "Virtual microphone: not configured"
-        )
+        mic_mode = virtual_mic_mode()
+        if mic_mode == "pipewire":
+            self._virtual_mic_node_name_edit.setText(config.virtual_microphone.node_name)
+            self._virtual_mic_description_edit.setText(config.virtual_microphone.description)
+            self._virtual_mic_status_label.setText(
+                "Virtual microphone: enabled in configuration"
+                if config.virtual_microphone.enabled
+                else "Virtual microphone: not configured"
+            )
+        elif mic_mode == "cable":
+            self._populate_virtual_cable_combo(config.virtual_microphone.cable_device_id)
+            if config.virtual_microphone.enabled:
+                self._virtual_mic_status_label.setText(
+                    "Virtual microphone: enabled (TTS routes into the selected cable)"
+                )
+            else:
+                self._virtual_mic_status_label.setText("Virtual microphone: not configured")
+        else:
+            self._virtual_mic_status_label.setText(
+                "Virtual microphone: not supported on this platform"
+            )
         self._final_transcript_edit.setPlainText(config.last_transcript)
         self._refresh_device_widgets()
+
+    # Usage: populate the virtual audio cable selector with detected cables and a manual fallback.
+    # Parameters: selected_id - the persisted cable output device id that should remain selected when available.
+    # Return: None.
+    def _populate_virtual_cable_combo(self, selected_id: str | None) -> None:
+        """Rebuild the virtual cable endpoint combo from the current catalog state."""
+
+        output_pairs = output_device_pairs(self._catalog.list_outputs())
+        detected = detect_cable_outputs(output_pairs)
+        selected_output_id = selected_id or self._virtual_cable_combo.currentData()
+
+        self._virtual_cable_combo.blockSignals(True)
+        self._virtual_cable_combo.clear()
+        self._virtual_cable_combo.addItem("Auto-detect first installed cable", None)
+
+        for device_id, name, family in detected:
+            mic_name = cable_mic_name_for_output(name, family)
+            self._virtual_cable_combo.addItem(
+                f'{family}: "{name}" -> mic "{mic_name}"',
+                device_id,
+            )
+
+        detected_ids = {device_id for device_id, _name, _family in detected}
+        for device_id, name in output_pairs:
+            if device_id in detected_ids:
+                continue
+            self._virtual_cable_combo.addItem(f'"{name}" (manual selection)', device_id)
+
+        if selected_output_id is not None:
+            matched_index = self._virtual_cable_combo.findData(selected_output_id)
+            if matched_index >= 0:
+                self._virtual_cable_combo.setCurrentIndex(matched_index)
+
+        self._virtual_cable_combo.blockSignals(False)
 
     # Usage: rebuild the input and output device widgets using the latest catalog state and current config selections.
     # Parameters: none.
@@ -442,6 +556,17 @@ class MainWindow(QMainWindow):
     def collect_config_from_form(self) -> AppConfig:
         """Build an AppConfig instance from the current UI form values."""
 
+        mic_mode = virtual_mic_mode()
+        if mic_mode == "cable":
+            cable_device_id = self._virtual_cable_combo.currentData()
+            cable_device_id = str(cable_device_id).strip() if cable_device_id else None
+            pipewire_node_name = ""
+            pipewire_description = ""
+        else:
+            cable_device_id = None
+            pipewire_node_name = self._virtual_mic_node_name_edit.text().strip()
+            pipewire_description = self._virtual_mic_description_edit.text().strip()
+
         return AppConfig(
             stt_endpoint=ServiceEndpoint(
                 host=self._stt_host_edit.text().strip() or "127.0.0.1",
@@ -459,8 +584,9 @@ class MainWindow(QMainWindow):
             ),
             virtual_microphone=VirtualMicrophoneConfig(
                 enabled=self._virtual_mic_enabled_checkbox.isChecked(),
-                node_name=self._virtual_mic_node_name_edit.text().strip(),
-                description=self._virtual_mic_description_edit.text().strip(),
+                node_name=pipewire_node_name,
+                description=pipewire_description,
+                cable_device_id=cable_device_id,
             ),
             last_transcript=self._final_transcript_edit.toPlainText(),
         )

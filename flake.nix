@@ -56,7 +56,7 @@
           pythonImportsCheck = [ "wyomingchat" ];
 
           meta = with pkgs.lib; {
-            description = "Wayland-native desktop bridge for local Wyoming STT and TTS services";
+            description = "Desktop bridge for local Wyoming STT and TTS services (Linux/PipeWire and Windows)";
             license = licenses.mit;
             mainProgram = "wyoming-voice-bridge";
             platforms = platforms.linux;

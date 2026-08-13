@@ -15,6 +15,7 @@ from .constants import (
     DEFAULT_VIRTUAL_MIC_DESCRIPTION,
     DEFAULT_VIRTUAL_MIC_NODE_NAME,
 )
+from .platforms import pipewire_virtual_mic_supported
 
 
 @dataclass(slots=True)
@@ -42,7 +43,10 @@ def command_exists(executable: str) -> bool:
 # Parameters: none.
 # Return: the parsed top-level JSON list produced by pw-dump, or an empty list on failure.
 def read_pw_dump() -> list[dict[str, Any]]:
-    """Run pw-dump and parse its JSON output."""
+    """Run pw-dump and parse its JSON output (PipeWire/Linux only)."""
+
+    if not pipewire_virtual_mic_supported():
+        return []
 
     if not command_exists("pw-dump"):
         return []
@@ -192,8 +196,15 @@ def build_virtual_microphone_config(node_name: str, description: str) -> str:
 # Usage: write the managed PipeWire virtual microphone config into the user's pipewire.conf.d directory.
 # Parameters: node_name - the requested PipeWire node name; description - the requested human-readable description.
 # Return: the filesystem path that was written so the caller can report it back to the user.
+# Raises: RuntimeError when the current platform does not support PipeWire virtual devices.
 def install_virtual_microphone_config(node_name: str, description: str) -> Path:
     """Write the managed PipeWire virtual microphone configuration file and return its path."""
+
+    if not pipewire_virtual_mic_supported():
+        raise RuntimeError(
+            "The managed virtual microphone requires PipeWire and is only available on Linux. "
+            "On this platform, route TTS to a normal speaker or headphone output instead."
+        )
 
     config_path = get_virtual_microphone_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)

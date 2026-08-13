@@ -245,15 +245,22 @@ def build_tts_voice_display_label(voice: TtsVoiceConfig, available_voices: list[
 
 @dataclass(slots=True)
 class VirtualMicrophoneConfig:
-    """Store the PipeWire node metadata used to create a virtual microphone sink."""
+    """Store the virtual microphone settings for the current platform strategy.
+
+    On Linux the node_name and description fields configure the managed
+    PipeWire loopback pair. On Windows the cable_device_id field records which
+    virtual audio cable playback endpoint TTS audio is routed into; the
+    paired microphone endpoint is then selectable by other applications.
+    """
 
     enabled: bool = False
     node_name: str = DEFAULT_VIRTUAL_MIC_NODE_NAME
     description: str = DEFAULT_VIRTUAL_MIC_DESCRIPTION
+    cable_device_id: str | None = None
 
     # Usage: serialize virtual microphone settings for JSON persistence.
     # Parameters: none.
-    # Return: a JSON-compatible dictionary with the PipeWire node settings.
+    # Return: a JSON-compatible dictionary with the virtual microphone settings.
     def to_dict(self) -> dict[str, Any]:
         """Convert the virtual microphone configuration into a JSON-compatible dictionary."""
 
@@ -261,6 +268,7 @@ class VirtualMicrophoneConfig:
             "enabled": self.enabled,
             "node_name": self.node_name,
             "description": self.description,
+            "cable_device_id": self.cable_device_id,
         }
 
     @classmethod
@@ -271,10 +279,16 @@ class VirtualMicrophoneConfig:
         """Create a VirtualMicrophoneConfig from persisted JSON data."""
 
         payload = payload if isinstance(payload, dict) else {}
+        raw_cable_device_id = payload.get("cable_device_id")
         return cls(
             enabled=coerce_bool(payload.get("enabled"), False),
             node_name=coerce_str(payload.get("node_name"), DEFAULT_VIRTUAL_MIC_NODE_NAME),
             description=coerce_str(payload.get("description"), DEFAULT_VIRTUAL_MIC_DESCRIPTION),
+            cable_device_id=(
+                str(raw_cable_device_id).strip()
+                if raw_cable_device_id is not None and str(raw_cable_device_id).strip()
+                else None
+            ),
         )
 
 

@@ -21,8 +21,10 @@ from .constants import (
     STATE_TRANSCRIBING,
 )
 from .pipewire import build_virtual_microphone_sink_node_name, install_virtual_microphone_config
+from .platforms import is_linux, virtual_mic_mode
 from .routing import build_tts_output_device_ids
 from .storage import JsonConfigStore
+from .virtual_cable import output_device_pairs, select_cable_output_id
 from .vad import (
     OpenMicVoiceDetector,
     build_stt_audio_format,
@@ -167,15 +169,24 @@ class BridgeController(QObject):
 
     # Usage: write the managed PipeWire virtual microphone config from the current application settings.
     # Parameters: none.
-    # Return: the filesystem path of the PipeWire config file that was written.
-    def install_virtual_microphone_from_config(self) -> Path:
+    # Return: the filesystem path of the PipeWire config file that was written, or None when the
+    #         platform does not support PipeWire virtual devices.
+    def install_virtual_microphone_from_config(self) -> Path | None:
         """Create or update the user's PipeWire virtual microphone configuration file."""
 
         virtual_mic = self._config.virtual_microphone
-        config_path = install_virtual_microphone_config(
-            node_name=virtual_mic.node_name,
-            description=virtual_mic.description,
-        )
+        try:
+            config_path = install_virtual_microphone_config(
+                node_name=virtual_mic.node_name,
+                description=virtual_mic.description,
+            )
+        except RuntimeError as exc:
+            # Surface a clear, recoverable message instead of letting the failure
+            # interrupt microphone monitoring or the Qt event loop.
+            self.error_changed.emit(str(exc))
+            self.status_changed.emit(str(exc))
+            return None
+
         self.virtual_microphone_configured.emit(str(config_path))
         self.status_changed.emit(
             "Virtual microphone config written. Restart pipewire, pipewire-pulse, and wireplumber to load it."
@@ -542,19 +553,45 @@ class BridgeController(QObject):
             self._tts_session = None
             self._handle_error(f"Failed to start synthesis: {exc}")
 
-    # Usage: resolve the Qt playback output id for the managed PipeWire virtual-microphone sink when virtual mic routing is enabled.
+    # Usage: resolve the Qt playback output id used as the virtual microphone target for the current platform.
     # Parameters: none.
-    # Return: the persisted Qt output-device id for the managed virtual microphone sink, or None when it is disabled or unavailable.
+    # Return: the persisted Qt output-device id that TTS audio should be routed into, or None when the
+    #         virtual microphone is disabled or its target device is unavailable.
     def _resolve_virtual_microphone_output_id(self) -> str | None:
-        """Return the playback output id for the managed virtual microphone sink when it can be found."""
+        """Return the playback output id used as the virtual microphone target.
+
+        On Linux this resolves the managed PipeWire loopback sink by node name.
+        On Windows this resolves the selected (or auto-detected) virtual audio
+        cable playback endpoint so other applications can pick the cable's
+        paired microphone endpoint.
+        """
 
         virtual_microphone = self._config.virtual_microphone
         if not virtual_microphone.enabled:
             return None
 
-        return self._catalog.find_output_device_id_by_pipewire_node_name(
-            build_virtual_microphone_sink_node_name(virtual_microphone.node_name)
-        )
+        if virtual_mic_mode() == "cable":
+            resolved_cable_id = select_cable_output_id(
+                virtual_microphone.cable_device_id,
+                output_device_pairs(self._catalog.list_outputs()),
+            )
+            if resolved_cable_id is None:
+                # Keep the user informed when the feature is enabled but no
+                # usable cable endpoint is currently installed or selected.
+                self.status_changed.emit(
+                    "Virtual microphone enabled but no audio cable was found. "
+                    "Install a free cable such as VB-CABLE (vb-audio.com/Cable) or Voicemeeter, "
+                    "or select a cable playback endpoint manually, then refresh devices."
+                )
+            return resolved_cable_id
+
+        if is_linux():
+            return self._catalog.find_output_device_id_by_pipewire_node_name(
+                build_virtual_microphone_sink_node_name(virtual_microphone.node_name)
+            )
+
+        # macOS and other platforms have no supported virtual-microphone target.
+        return None
 
     # Usage: prepare output sinks when the active TTS session announces the PCM audio format.
     # Parameters: generation - the TTS session generation that produced the format; format_spec - the raw PCM format of the incoming synthesized audio.
