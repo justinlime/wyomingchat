@@ -63,3 +63,31 @@ def test_describe_audio_format_includes_sample_format_name() -> None:
     )
 
     assert description == "16000 Hz, 1 channel, 32-bit float32"
+
+
+# Usage: verify that the drain delay uses the larger of the estimate and sink buffer, never their sum.
+# Parameters: none.
+# Return: None.
+def test_drain_delay_never_double_counts_sink_buffer() -> None:
+    """Ensure sentence chaining does not pause for nearly twice the remaining audio."""
+
+    from wyomingchat.audio import _drain_delay_for
+
+    # The wall-clock estimate already includes the sink-queued audio, so adding the
+    # sink measurement on top would yield ~2x the remaining time.
+    assert _drain_delay_for(500.0, 500.0) == 600  # 500 + 100ms margin, not ~1080
+    assert _drain_delay_for(500.0, 0.0) == 600
+    assert _drain_delay_for(0.0, 500.0) == 600
+    assert _drain_delay_for(0.0, 0.0) == 100
+
+
+# Usage: verify that a sink buffer larger than the estimate still protects the tail.
+# Parameters: none.
+# Return: None.
+def test_drain_delay_uses_larger_measurement_to_protect_tail() -> None:
+    """Ensure the drain waits long enough when the sink reports more buffered audio."""
+
+    from wyomingchat.audio import _drain_delay_for
+
+    assert _drain_delay_for(200.0, 1500.0) == 1600
+    assert _drain_delay_for(1500.0, 200.0) == 1600

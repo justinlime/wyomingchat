@@ -22,6 +22,22 @@ from .pipewire import PipeWireNode, build_node_lookup, list_audio_nodes
 from .routing import choose_available_output_device_ids
 
 
+# Usage: compute how long to wait before stopping playback after all audio has been handed to the sinks.
+# Parameters: estimated_ms - the wall-clock estimate of remaining audio (includes everything written but not yet elapsed); sink_buffered_ms - the amount currently queued inside the Qt audio sink.
+# Return: the drain delay in milliseconds.
+def _drain_delay_for(estimated_ms: float, sink_buffered_ms: float) -> int:
+    """Return the playback drain delay without double-counting the sink buffer.
+
+    The wall-clock estimate already includes audio waiting inside the Qt sink, so
+    the true remaining time is the larger of the two measurements, never their
+    sum - summing would pause for nearly twice the remaining audio and create a
+    long silent gap before the next sentence starts playing.
+    """
+
+    remaining_ms = max(float(estimated_ms), float(sink_buffered_ms))
+    return max(80, int(remaining_ms) + 100)
+
+
 @dataclass(slots=True)
 class AudioDeviceDescriptor:
     """Describe an audio input or output device shown in the user interface."""
@@ -576,14 +592,9 @@ class MultiOutputPlayer(QObject):
     def _schedule_drain_stop(self) -> None:
         """Schedule playback shutdown after the currently queued audio is expected to drain."""
 
-        # Keep the margin small so sentence-to-sentence chaining feels gapless while
-        # still leaving room for scheduler jitter so the tail is never cut off.
-        drain_delay = max(80, int(self._estimated_buffer_ms) + 100)
-        # The QAudioSink holds an internal buffer beyond the bytes we have written.
-        # Ignoring it under-counts the remaining audio and cuts off the tail of every
-        # stream, which worsens as device-side latency accumulates over a long session.
-        drain_delay = max(drain_delay, int(self._estimated_buffer_ms + self._sink_buffered_ms()) + 80)
-        self._drain_timer.start(drain_delay)
+        self._drain_timer.start(
+            _drain_delay_for(self._estimated_buffer_ms, self._sink_buffered_ms())
+        )
 
     # Usage: measure the largest amount of PCM currently sitting inside the Qt audio sinks.
     # Parameters: none.
