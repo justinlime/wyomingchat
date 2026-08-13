@@ -213,6 +213,50 @@ def test_save_configuration_resets_streaming_flag_on_endpoint_change(tmp_path) -
     assert controller._config.tts_streaming_supported is False
 
 
+# Usage: verify that the TTS chunk backpressure does not lose the ack when the GUI acknowledges quickly.
+# Parameters: tmp_path - pytest fixture.
+# Return: None.
+def test_tts_chunk_backpressure_does_not_stall_on_fast_gui(tmp_path) -> None:
+    """Ensure a fast GUI thread acking a chunk does not stall the TTS reader for the full deadline."""
+
+    import threading as threading_module
+    import time as time_module
+
+    controller = build_controller(tmp_path)
+    controller._tts_generation = 1
+    ack = threading_module.Event()
+    controller._tts_chunk_ack = ack
+
+    class _FakeSession:
+        _completed = threading_module.Event()
+
+    controller._tts_session = _FakeSession()
+    processed: list[bytes] = []
+
+    class _SpySignal:
+        """Replace the chunk signal with a fast GUI stub that acks synchronously."""
+
+        def emit(self, generation: int, chunk: bytes) -> None:
+            # The ack must already be cleared before the chunk is queued; if the
+            # reader cleared it after emitting, this ack would be lost and the
+            # reader would stall for the full 10s deadline.
+            assert ack.is_set() is False, "ack was not cleared before the chunk signal was emitted"
+            processed.append(chunk)
+            ack.set()
+
+    original_signal = controller._tts_audio_chunk_received
+    controller._tts_audio_chunk_received = _SpySignal()
+    try:
+        started_at = time_module.monotonic()
+        controller._emit_tts_chunk_with_backpressure(b"chunk-bytes", 1)
+        elapsed_ms = (time_module.monotonic() - started_at) * 1000.0
+    finally:
+        controller._tts_audio_chunk_received = original_signal
+
+    assert processed == [b"chunk-bytes"]
+    assert elapsed_ms < 1000.0, f"reader stalled for {elapsed_ms:.0f} ms waiting on a lost ack"
+
+
 # Usage: verify that streamed TTS chunks reach the player incrementally, not in a burst at the end.
 # Parameters: tmp_path - pytest fixture; qapp - module-level Qt app fixture.
 # Return: None.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+import time
 
 from PySide6.QtCore import QPoint, Qt, QSize
 from PySide6.QtGui import QCloseEvent
@@ -610,7 +611,20 @@ class MainWindow(QMainWindow):
 
         self._error_edit = QPlainTextEdit()
         self._error_edit.setReadOnly(True)
-        pane.addTab(self._error_edit, "Errors")
+        # Keep the in-app error log bounded so long sessions do not grow it without limit.
+        self._error_edit.document().setMaximumBlockCount(1000)
+
+        error_page = QWidget()
+        error_layout = QVBoxLayout(error_page)
+        error_layout.setContentsMargins(0, 0, 0, 0)
+        error_layout.addWidget(self._error_edit)
+        self._clear_error_log_button = QPushButton("Clear log")
+        self._clear_error_log_button.clicked.connect(self._error_edit.clear)
+        error_layout.addWidget(
+            self._clear_error_log_button,
+            alignment=Qt.AlignmentFlag.AlignRight,
+        )
+        pane.addTab(error_page, "Error Log")
 
         return pane
 
@@ -1083,13 +1097,21 @@ class MainWindow(QMainWindow):
 
         self._final_transcript_edit.setPlainText(text)
 
-    # Usage: display controller errors in the read-only error text pane.
-    # Parameters: text - the error message to show.
+    # Usage: append the latest controller error to the scrollable error log with a timestamp.
+    # Parameters: text - the error message to log; empty messages clear nothing and are ignored.
     # Return: None.
     def _handle_error_changed(self, text: str) -> None:
-        """Display the latest controller error message."""
+        """Append controller errors to the persistent in-app error log."""
 
-        self._error_edit.setPlainText(text)
+        normalized_text = str(text).strip()
+        if not normalized_text:
+            return
+
+        self._error_edit.appendPlainText(f"[{time.strftime('%H:%M:%S')}] {normalized_text}")
+        # Keep the newest entry visible so the user immediately sees the error.
+        scrollbar = self._error_edit.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
 
     # Usage: stop background workers cleanly when the main window is being closed.
     # Parameters: event - the Qt close event emitted by the window manager.

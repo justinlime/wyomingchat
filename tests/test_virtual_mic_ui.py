@@ -39,6 +39,32 @@ def build_window(tmp_path) -> tuple[BridgeController, object]:
     return controller, window
 
 
+# Usage: verify the Errors tab appends timestamped log entries instead of replacing the previous error.
+# Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
+# Return: None.
+def test_error_log_appends_errors_with_timestamps(tmp_path, qapp) -> None:
+    """Ensure the error tab behaves as a scrollable log with a working clear action."""
+
+    controller, window = build_window(tmp_path)
+    controller.error_changed.emit("first failure")
+    controller.error_changed.emit("second failure")
+
+    log_text = window._error_edit.toPlainText()
+    assert "first failure" in log_text
+    assert "second failure" in log_text
+    assert log_text.index("first failure") < log_text.index("second failure")
+
+    # Routine empty error clears must not pollute the log.
+    controller.error_changed.emit("")
+    assert window._error_edit.toPlainText() == log_text
+
+    # The clear button resets the log for the next session of troubleshooting.
+    window._clear_error_log_button.click()
+    assert window._error_edit.toPlainText() == ""
+
+    window.close()
+
+
 # Usage: verify the Linux/PipeWire virtual microphone form still builds and round-trips config.
 # Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
 # Return: None.

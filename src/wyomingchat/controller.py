@@ -693,11 +693,17 @@ class BridgeController(QObject):
         appear to start only after the final chunk arrives.
         """
 
-        self._tts_audio_chunk_received.emit(generation, audio_chunk)
         ack = self._tts_chunk_ack
         if ack is None:
             return
+        # Clear the ack BEFORE queueing the chunk. Clearing after emit races
+        # with the GUI thread: if the GUI processes the queued signal and sets
+        # the ack before this thread clears it, the ack is lost and this reader
+        # waits the full 10s deadline for an acknowledgement that already
+        # happened, so playback stops abruptly and resumes only after a long
+        # silent pause.
         ack.clear()
+        self._tts_audio_chunk_received.emit(generation, audio_chunk)
         deadline = time.monotonic() + 10.0
         while not ack.is_set():
             if self._tts_session is None or self._tts_session._completed.is_set():
@@ -877,6 +883,9 @@ class BridgeController(QObject):
         if not normalized_message:
             return
 
+        # Persist the error to the application log file so it remains available
+        # for diagnosis across restarts, in addition to the in-app error log.
+        LOGGER.error("Controller error: %s", normalized_message)
         self._abort_current_activity(stop_capture=False)
         self._set_state(STATE_ERROR)
         self.error_changed.emit(normalized_message)
