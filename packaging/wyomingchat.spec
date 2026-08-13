@@ -3,13 +3,15 @@
 # Build with:
 #   uv run --extra packaging pyinstaller --noconfirm packaging/wyomingchat.spec
 #
-# The onedir layout (EXE + adjacent folder) is used instead of onefile because
-# Qt Multimedia relies on runtime-discovered plugins; onedir is the reliable
-# layout for Qt applications.
+# The onefile layout (a single self-contained EXE) is used so the executable
+# can be moved or copied anywhere on its own. PyInstaller embeds everything -
+# including the Qt runtime and plugins - into the EXE and extracts them to a
+# temporary directory at launch, so Qt Multimedia plugin discovery works the
+# same as it did with the old onedir/_internal layout.
 #
 # Output:
-#   dist/WyomingVoiceBridge/WyomingVoiceBridge.exe   (Windows, no console window)
-#   dist/WyomingVoiceBridge/wyoming-voice-bridge     (Linux binary)
+#   dist/WyomingVoiceBridge.exe   (Windows, no console window)
+#   dist/wyoming-voice-bridge     (Linux single binary)
 
 from __future__ import annotations
 
@@ -69,7 +71,9 @@ import PySide6  # noqa: E402
 _pyside6_root = Path(os.path.dirname(PySide6.__file__))
 _qt_root = _pyside6_root / "Qt"
 # The PySide6 runtime hook maps QT_PLUGIN_PATH to <bundle>/PySide6/plugins on
-# Windows and <bundle>/PySide6/Qt/plugins everywhere else.
+# Windows and <bundle>/PySide6/Qt/plugins everywhere else. With onefile the
+# bundle is the temporary extraction directory created at launch, so plugin
+# discovery works identically to onedir.
 _dest_prefix = "PySide6" if _sys.platform == "win32" else "PySide6/Qt"
 binaries += _collect_qt_plugins(_qt_root, _dest_prefix)
 
@@ -132,11 +136,14 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# onefile EXE: embed the binaries and data directly into the executable so
+# there is no adjacent `_internal` directory and the EXE can be moved freely.
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="WyomingVoiceBridge",
     debug=False,
     bootloader_ignore_signals=False,
@@ -149,14 +156,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(icon_path) if icon_path is not None else None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="WyomingVoiceBridge",
 )

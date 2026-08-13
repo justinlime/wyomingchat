@@ -473,11 +473,12 @@ class MainWindow(QMainWindow):
         self._virtual_mic_description_edit = QLineEdit()
         self._install_virtual_mic_button = QPushButton("Write PipeWire Config")
         self._install_virtual_mic_button.clicked.connect(self._handle_install_virtual_mic_clicked)
-        self._install_virtual_mic_button.setToolTip(wrap_tooltip_text(
+        install_tooltip = (
             "Writes a PipeWire loopback config creating a playback sink and a linked microphone-like source. "
             "The virtual mic carries only the app's TTS output. "
             "Restart pipewire, pipewire-pulse, and wireplumber after writing the config."
-        ))
+        )
+        self._install_virtual_mic_button.setToolTip(wrap_tooltip_text(install_tooltip))
 
         layout.addRow(
             self._option_label(
@@ -506,7 +507,7 @@ class MainWindow(QMainWindow):
         layout.addRow(
             self._option_label(
                 "Install/update",
-                self._install_virtual_mic_button.toolTip(),
+                install_tooltip,
             ),
             self._install_virtual_mic_button,
         )
@@ -549,10 +550,11 @@ class MainWindow(QMainWindow):
         self._refresh_cables_button = QPushButton("Refresh Cables")
         self._refresh_cables_button.clicked.connect(self._handle_refresh_cables_clicked)
         self._refresh_cables_button.setToolTip(wrap_tooltip_text("Re-scan audio devices after installing or updating a virtual audio cable driver."))
-        self._virtual_cable_combo.setToolTip(wrap_tooltip_text(
+        cable_combo_tooltip = (
             "Install a free virtual audio cable once (VB-CABLE at vb-audio.com/Cable or Voicemeeter), "
             "then pick its playback endpoint. Other apps can then select the cable's microphone endpoint."
-        ))
+        )
+        self._virtual_cable_combo.setToolTip(wrap_tooltip_text(cable_combo_tooltip))
 
         cable_row = QWidget()
         cable_layout = QHBoxLayout(cable_row)
@@ -571,7 +573,7 @@ class MainWindow(QMainWindow):
         layout.addRow(
             self._option_label(
                 "Cable playback endpoint",
-                self._virtual_cable_combo.toolTip(),
+                cable_combo_tooltip,
             ),
             cable_row,
         )

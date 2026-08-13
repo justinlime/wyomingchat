@@ -68,7 +68,7 @@ the XDG config/state directories).
 
 ## Building the Windows EXE
 
-The project includes a PyInstaller spec that produces a self-contained, one-folder
+The project includes a PyInstaller spec that produces a self-contained, single-file
 Windows application with no Python required at runtime.
 
 ```powershell
@@ -77,9 +77,11 @@ uv sync --extra packaging
 uv run pyinstaller --noconfirm packaging/wyomingchat.spec
 ```
 
-The output lands in `dist\WyomingVoiceBridge\WyomingVoiceBridge.exe`. Run that file
-directly; the adjacent `_internal` folder must stay next to the EXE (the one-folder
-layout is used because Qt Multimedia loads its audio plugins at runtime).
+The output is a single `dist\WyomingVoiceBridge.exe` that can be copied or moved
+anywhere on its own. PyInstaller embeds everything (Python, Qt, the audio
+plugins, and the Silero VAD model) into the EXE and extracts it to a temporary
+directory at launch, so there is no adjacent `_internal` folder that must stay
+next to the executable.
 
 Build details handled by `packaging/wyomingchat.spec`:
 
