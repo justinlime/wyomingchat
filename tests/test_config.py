@@ -170,3 +170,19 @@ def test_streaming_synthesis_round_trips() -> None:
     original.streaming_synthesis = False
     restored = AppConfig.from_dict(original.to_dict())
     assert restored.streaming_synthesis is False
+
+
+# Usage: verify that the silence timeout persists and is clamped to the supported range.
+# Parameters: none.
+# Return: None.
+def test_stop_silence_ms_round_trips_and_clamps() -> None:
+    """Ensure stop_silence_ms persists and defaults to the generous 2.5s timeout."""
+
+    assert AppConfig().stop_silence_ms == 2500
+
+    original = AppConfig()
+    original.stop_silence_ms = 4000
+    assert AppConfig.from_dict(original.to_dict()).stop_silence_ms == 4000
+
+    assert AppConfig.from_dict({"stop_silence_ms": 999999}).stop_silence_ms == 6000
+    assert AppConfig.from_dict({"stop_silence_ms": 0}).stop_silence_ms == 500

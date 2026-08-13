@@ -581,6 +581,14 @@ class OpenMicVoiceDetector:
 
         self._start_level_threshold = max(0.0, min(1.0, float(start_level_threshold)))
 
+    # Usage: update how many consecutive silent frames end the current utterance while it is active.
+    # Parameters: stop_silence_frames - the number of silent frames required before the utterance ends.
+    # Return: None.
+    def set_stop_silence_frames(self, stop_silence_frames: int) -> None:
+        """Update the trailing-silence hangover used to end the current utterance."""
+
+        self._stop_silence_frames = max(1, int(stop_silence_frames))
+
     # Usage: clear all buffered microphone and detector state after a session completes or when the controller must ignore audio temporarily.
     # Parameters: none.
     # Return: None.

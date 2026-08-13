@@ -13,6 +13,16 @@ from __future__ import annotations
 SENTENCE_BOUNDARY_CHARS = ".!?"
 
 
+# Usage: normalize sentence text for content comparison so punctuation and whitespace differences are ignored.
+# Parameters: text - the sentence text to normalize.
+# Return: a compact lowercase key with boundary punctuation and whitespace removed.
+def _content_key(text: str) -> str:
+    """Return a comparison key that ignores boundary punctuation and whitespace."""
+
+    compact = "".join(str(text).split()).strip(SENTENCE_BOUNDARY_CHARS)
+    return compact.casefold()
+
+
 # Usage: split transcript text into completed sentences and the trailing remainder.
 # Parameters: text - the transcript text to split.
 # Return: a tuple of (completed sentences, trailing un-bounded remainder).
@@ -76,7 +86,9 @@ class StreamingTranscriptChunker:
         committed_index = 0
         uncommitted: list[str] = []
         for sentence in sentences:
-            if committed_index < len(self._committed) and sentence == self._committed[committed_index]:
+            if committed_index < len(self._committed) and _content_key(sentence) == _content_key(
+                self._committed[committed_index]
+            ):
                 committed_index += 1
                 continue
             uncommitted.append(sentence)
@@ -110,14 +122,23 @@ class StreamingTranscriptChunker:
     # Parameters: final_text - the final transcript text delivered by the STT service.
     # Return: the remaining sentence texts (including the un-bounded tail, which is final now).
     def finish(self, final_text: str) -> list[str]:
-        """Return the remaining sentences from the final transcript that need synthesis."""
+        """Return and commit the remaining sentences from the final transcript.
+
+        The returned sentences are marked committed so a later finish() call - for
+        example when the final transcript arrives after the tail was already
+        dispatched from the last partial - does not synthesize them twice. Content
+        comparison ignores boundary punctuation so "Turn on the lights" and
+        "Turn on the lights." are treated as the same sentence.
+        """
 
         sentences, trailing = split_completed_sentences(final_text)
 
         remaining: list[str] = []
         committed_index = 0
         for sentence in sentences:
-            if committed_index < len(self._committed) and sentence == self._committed[committed_index]:
+            if committed_index < len(self._committed) and _content_key(sentence) == _content_key(
+                self._committed[committed_index]
+            ):
                 committed_index += 1
                 continue
             remaining.append(sentence)
@@ -125,4 +146,6 @@ class StreamingTranscriptChunker:
         if trailing:
             remaining.append(trailing)
 
-        return [sentence for sentence in remaining if sentence]
+        confirmed = [sentence for sentence in remaining if sentence]
+        self._committed.extend(confirmed)
+        return confirmed

@@ -20,6 +20,13 @@ DEFAULT_MIC_GATE_THRESHOLD_PERCENT = 4
 DEFAULT_MIC_GAIN = 1.0
 MAX_MIC_GAIN = 10.0
 
+# How long the user must stay silent before the utterance is considered finished.
+# Natural pauses mid-thought are often 1.5-2.5s, so the default is deliberately
+# generous to avoid splitting long speech into separate STT sessions.
+MIN_STOP_SILENCE_MS = 500
+DEFAULT_STOP_SILENCE_MS = 2500
+MAX_STOP_SILENCE_MS = 6000
+
 DEFAULT_VAD_SAMPLE_RATE = 16_000
 DEFAULT_VAD_FRAME_MS = 32
 DEFAULT_VAD_PRE_ROLL_MS = 600

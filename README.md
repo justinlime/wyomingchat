@@ -106,6 +106,7 @@ The UI currently lets you configure:
 - Microphone input device used for always-on monitoring
 - Microphone gate threshold (start speech above a background level)
 - Microphone boost (1x-10x gain for quiet microphones)
+- End-utterance silence timeout (default 2.5s; raise it if natural mid-thought pauses split a long reply)
 - One or more playback outputs for synthesized audio
 - Virtual microphone routing: PipeWire loopback (Linux) or virtual audio cable (Windows)
 - PipeWire virtual microphone node name and description (Linux only)

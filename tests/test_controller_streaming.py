@@ -115,3 +115,21 @@ def test_stt_complete_without_streaming_uses_single_request(tmp_path, monkeypatc
     assert [session["text"] for session in FakeTtsSession.created_sessions] == [
         "Turn on the lights. Set the volume."
     ]
+
+
+# Usage: verify that the silence timeout slider updates the live detector immediately.
+# Parameters: tmp_path - pytest fixture.
+# Return: None.
+def test_set_stop_silence_ms_updates_live_detector(tmp_path) -> None:
+    """Ensure the config value and live VAD hangover both reflect the new timeout."""
+
+    controller = build_controller(tmp_path)
+    controller._voice_detector = controller_module.OpenMicVoiceDetector(
+        controller_module.AudioFormatSpec(),
+    )
+    controller._voice_detector.set_stop_silence_frames(40)
+
+    controller.set_stop_silence_ms(4000)
+
+    assert controller.config.stop_silence_ms == 4000
+    assert controller._voice_detector._stop_silence_frames == 125  # 4000ms / 32ms

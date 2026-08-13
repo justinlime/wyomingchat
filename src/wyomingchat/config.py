@@ -8,6 +8,7 @@ from typing import Any
 from .constants import (
     DEFAULT_MIC_GATE_THRESHOLD_PERCENT,
     DEFAULT_MIC_GAIN,
+    DEFAULT_STOP_SILENCE_MS,
     DEFAULT_STT_HOST,
     DEFAULT_STT_PORT,
     DEFAULT_TTS_HOST,
@@ -15,6 +16,8 @@ from .constants import (
     DEFAULT_VIRTUAL_MIC_DESCRIPTION,
     DEFAULT_VIRTUAL_MIC_NODE_NAME,
     MAX_MIC_GAIN,
+    MAX_STOP_SILENCE_MS,
+    MIN_STOP_SILENCE_MS,
 )
 
 
@@ -319,6 +322,7 @@ class AppConfig:
     tts_voice: TtsVoiceConfig = field(default_factory=TtsVoiceConfig)
     mic_gate_threshold_percent: int = DEFAULT_MIC_GATE_THRESHOLD_PERCENT
     mic_gain: float = DEFAULT_MIC_GAIN
+    stop_silence_ms: int = DEFAULT_STOP_SILENCE_MS
     streaming_synthesis: bool = True
     audio: AudioSelection = field(default_factory=AudioSelection)
     virtual_microphone: VirtualMicrophoneConfig = field(default_factory=VirtualMicrophoneConfig)
@@ -336,6 +340,7 @@ class AppConfig:
             "tts_voice": self.tts_voice.to_dict(),
             "mic_gate_threshold_percent": self.mic_gate_threshold_percent,
             "mic_gain": self.mic_gain,
+            "stop_silence_ms": self.stop_silence_ms,
             "streaming_synthesis": self.streaming_synthesis,
             "audio": self.audio.to_dict(),
             "virtual_microphone": self.virtual_microphone.to_dict(),
@@ -370,6 +375,10 @@ class AppConfig:
             mic_gain=max(
                 1.0,
                 min(MAX_MIC_GAIN, coerce_float(payload.get("mic_gain"), DEFAULT_MIC_GAIN)),
+            ),
+            stop_silence_ms=max(
+                MIN_STOP_SILENCE_MS,
+                min(MAX_STOP_SILENCE_MS, coerce_int(payload.get("stop_silence_ms"), DEFAULT_STOP_SILENCE_MS)),
             ),
             streaming_synthesis=coerce_bool(payload.get("streaming_synthesis"), True),
             audio=AudioSelection.from_dict(payload.get("audio")),

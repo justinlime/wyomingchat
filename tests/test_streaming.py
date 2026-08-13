@@ -115,3 +115,30 @@ def test_finish_handles_empty_final_text() -> None:
     chunker = StreamingTranscriptChunker()
 
     assert chunker.finish("") == []
+
+
+# Usage: verify that a tail dispatched from the last partial is not synthesized twice when the final transcript adds punctuation.
+# Parameters: none.
+# Return: None.
+def test_finish_commits_and_dedupes_across_calls() -> None:
+    """Ensure stop-time tail dispatch is not duplicated at STT finalization."""
+
+    chunker = StreamingTranscriptChunker(stability=1)
+
+    assert chunker.finish("Turn on the lights") == ["Turn on the lights"]
+    # The final transcript adds the terminal period - must not synthesize twice.
+    assert chunker.finish("Turn on the lights.") == []
+
+
+# Usage: verify the full streaming lifecycle dedupes bounded and un-bounded sentence forms.
+# Parameters: none.
+# Return: None.
+def test_finish_dedupes_bounded_and_unbounded_forms() -> None:
+    """Ensure committed sentences are skipped in later finish calls regardless of punctuation."""
+
+    chunker = StreamingTranscriptChunker(stability=2)
+
+    assert chunker.consume_partial("One.") == []
+    assert chunker.consume_partial("One. Two") == ["One."]
+    assert chunker.finish("One. Two") == ["Two"]
+    assert chunker.finish("One. Two.") == []

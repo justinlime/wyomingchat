@@ -14,7 +14,10 @@ from .audio_types import AudioFormatSpec, describe_audio_format
 from .clients import SpeechToTextSession, TextToSpeechSession, TtsVoiceQuerySession
 from .config import AppConfig, ServiceEndpoint, TtsVoiceConfig, build_default_config
 from .constants import (
+    DEFAULT_VAD_FRAME_MS,
     MAX_MIC_GAIN,
+    MAX_STOP_SILENCE_MS,
+    MIN_STOP_SILENCE_MS,
     STATE_ERROR,
     STATE_IDLE,
     STATE_LISTENING,
@@ -111,6 +114,7 @@ class BridgeController(QObject):
         self._stt_generation = 0
         self._latest_final_transcript = ""
         self._pending_tts_text: str | None = None
+        self._last_partial_text = ""
         self._synthesis_sessions: list[TextToSpeechSession] = []
         self._sentence_units: list[_SentenceAudioUnit] = []
         self._current_unit_index = -1
@@ -278,6 +282,19 @@ class BridgeController(QObject):
 
         self._config.mic_gain = max(1.0, min(MAX_MIC_GAIN, float(gain_multiplier)))
 
+    # Usage: apply a new trailing-silence timeout immediately so natural mid-thought pauses do not split the utterance.
+    # Parameters: silence_ms - the maximum silence duration in milliseconds before the utterance ends.
+    # Return: None.
+    def set_stop_silence_ms(self, silence_ms: int) -> None:
+        """Update the live utterance-end silence timeout without restarting monitoring."""
+
+        normalized_silence_ms = max(MIN_STOP_SILENCE_MS, min(MAX_STOP_SILENCE_MS, int(silence_ms)))
+        self._config.stop_silence_ms = normalized_silence_ms
+        if self._voice_detector is not None:
+            self._voice_detector.set_stop_silence_frames(
+                max(1, round(normalized_silence_ms / DEFAULT_VAD_FRAME_MS))
+            )
+
     # Usage: cleanly shut down background services when the application exits.
     # Parameters: none.
     # Return: None.
@@ -359,6 +376,7 @@ class BridgeController(QObject):
             self._voice_detector = OpenMicVoiceDetector(
                 capture_plan.format_spec,
                 start_level_threshold=self._config.mic_gate_threshold_percent / 100.0,
+                stop_silence_frames=max(1, round(self._config.stop_silence_ms / DEFAULT_VAD_FRAME_MS)),
             )
             self._capture.start_capture(capture_plan)
             self.monitoring_changed.emit(True)
@@ -472,6 +490,13 @@ class BridgeController(QObject):
             self.status_changed.emit("Speech ended. Finalizing transcription...")
             self.listening_changed.emit(False)
 
+            # Streaming synthesis: finalize the chunker with the latest partial so the
+            # un-bounded tail sentence starts synthesizing while the STT server is still
+            # finalizing - hiding that latency behind the first sentences' playback.
+            if self._config.streaming_synthesis and self._chunker is not None:
+                for sentence in self._chunker.finish(self._last_partial_text):
+                    self._start_sentence_synthesis(sentence)
+
     # Usage: create the next Wyoming STT session for a newly detected utterance and scope callbacks to its generation.
     # Parameters: none.
     # Return: True when the STT session started successfully, otherwise False.
@@ -483,6 +508,7 @@ class BridgeController(QObject):
         self.final_transcript_changed.emit("")
         self._latest_final_transcript = ""
         self._pending_tts_text = None
+        self._last_partial_text = ""
         self._synthesis_sessions = []
         self._sentence_units = []
         self._current_unit_index = -1
@@ -521,6 +547,7 @@ class BridgeController(QObject):
             return
 
         self.partial_transcript_changed.emit(text)
+        self._last_partial_text = text
         if self._state in {STATE_LISTENING, STATE_TRANSCRIBING}:
             self.status_changed.emit("Receiving transcript updates...")
 

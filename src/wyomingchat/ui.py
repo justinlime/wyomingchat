@@ -34,7 +34,7 @@ from .config import (
     VirtualMicrophoneConfig,
     build_tts_voice_display_label,
 )
-from .constants import APP_NAME
+from .constants import APP_NAME, MAX_STOP_SILENCE_MS, MIN_STOP_SILENCE_MS
 from .controller import BridgeController
 from .platforms import platform_label, virtual_mic_mode
 from .virtual_cable import cable_mic_name_for_output, detect_cable_outputs, output_device_pairs
@@ -233,16 +233,30 @@ class MainWindow(QMainWindow):
         boost_layout.addWidget(self._mic_gain_slider, stretch=1)
         boost_layout.addWidget(self._mic_gain_value_label)
 
+        self._stop_silence_slider = QSlider(Qt.Orientation.Horizontal)
+        self._stop_silence_slider.setRange(MIN_STOP_SILENCE_MS, MAX_STOP_SILENCE_MS)
+        self._stop_silence_slider.setSingleStep(100)
+        self._stop_silence_slider.valueChanged.connect(self._handle_stop_silence_slider_changed)
+        self._stop_silence_value_label = QLabel("2.5s")
+
+        silence_row = QWidget()
+        silence_layout = QHBoxLayout(silence_row)
+        silence_layout.setContentsMargins(0, 0, 0, 0)
+        silence_layout.addWidget(self._stop_silence_slider, stretch=1)
+        silence_layout.addWidget(self._stop_silence_value_label)
+
         hint = QLabel(
             "Increase the gate if quiet background sounds or button taps keep triggering the app. "
             "If your mic reads low on the header meter while you speak normally, raise the Mic boost. "
-            "Watch the live mic level in the header while the room is quiet, then set the gate slightly above that background level."
+            "Watch the live mic level in the header while the room is quiet, then set the gate slightly above that background level. "
+            "Set 'End utterance after' long enough that natural mid-thought pauses do not split a long reply."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
 
         layout.addRow("Start speech above", slider_row)
         layout.addRow("Mic boost", boost_row)
+        layout.addRow("End utterance after", silence_row)
         layout.addRow(hint)
         return page
 
@@ -412,6 +426,7 @@ class MainWindow(QMainWindow):
         self._refresh_tts_voice_combo(config.tts_voice)
         self._set_mic_gate_threshold(config.mic_gate_threshold_percent)
         self._set_mic_boost(config.mic_gain)
+        self._set_stop_silence(config.stop_silence_ms)
         self._streaming_synthesis_checkbox.setChecked(config.streaming_synthesis)
         self._virtual_mic_enabled_checkbox.setChecked(config.virtual_microphone.enabled)
         mic_mode = virtual_mic_mode()
@@ -545,6 +560,18 @@ class MainWindow(QMainWindow):
         self._mic_gain_slider.blockSignals(False)
         self._mic_gain_value_label.setText(f"{normalized_gain:.1f}x")
 
+    # Usage: display the supplied utterance-end silence timeout in the slider row.
+    # Parameters: silence_ms - the maximum silence in milliseconds before the utterance ends.
+    # Return: None.
+    def _set_stop_silence(self, silence_ms: int) -> None:
+        """Display the supplied silence timeout in the slider row."""
+
+        normalized_silence_ms = max(MIN_STOP_SILENCE_MS, min(MAX_STOP_SILENCE_MS, int(silence_ms)))
+        self._stop_silence_slider.blockSignals(True)
+        self._stop_silence_slider.setValue(normalized_silence_ms)
+        self._stop_silence_slider.blockSignals(False)
+        self._stop_silence_value_label.setText(f"{normalized_silence_ms / 1000.0:.1f}s")
+
     # Usage: fill the microphone combo box and restore the selected device when possible.
     # Parameters: selected_id - the previously selected microphone id, or None to select the default device.
     # Return: None.
@@ -635,6 +662,7 @@ class MainWindow(QMainWindow):
             tts_voice=self._collect_selected_tts_voice(),
             mic_gate_threshold_percent=self._mic_gate_slider.value(),
             mic_gain=self._mic_gain_slider.value() / 10.0,
+            stop_silence_ms=self._stop_silence_slider.value(),
             streaming_synthesis=self._streaming_synthesis_checkbox.isChecked(),
             audio=AudioSelection(
                 input_device_id=self._input_combo.currentData(),
@@ -701,6 +729,16 @@ class MainWindow(QMainWindow):
         gain_multiplier = max(10, min(100, int(value))) / 10.0
         self._mic_gain_value_label.setText(f"{gain_multiplier:.1f}x")
         self._controller.set_mic_gain(gain_multiplier)
+
+    # Usage: apply the utterance-end silence timeout slider value to the live VAD state machine.
+    # Parameters: value - the slider value in milliseconds.
+    # Return: None.
+    def _handle_stop_silence_slider_changed(self, value: int) -> None:
+        """Reflect the latest silence timeout in the UI and apply it immediately."""
+
+        silence_ms = max(MIN_STOP_SILENCE_MS, min(MAX_STOP_SILENCE_MS, int(value)))
+        self._stop_silence_value_label.setText(f"{silence_ms / 1000.0:.1f}s")
+        self._controller.set_stop_silence_ms(silence_ms)
 
     # Usage: persist the current form values and write the managed PipeWire virtual microphone config file.
     # Parameters: none.

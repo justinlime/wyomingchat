@@ -591,3 +591,38 @@ def test_amplify_pcm_chunk_leaves_unchanged_without_boost() -> None:
     assert amplify_pcm_chunk(frame, format_spec, 1.0) == frame
     assert amplify_pcm_chunk(frame, format_spec, 0.5) == frame
     assert amplify_pcm_chunk(b"", format_spec, 2.0) == b""
+
+
+# Usage: verify that raising the silence hangover live tolerates longer mid-utterance pauses.
+# Parameters: none.
+# Return: None.
+def test_set_stop_silence_frames_extends_pause_tolerance() -> None:
+    """Ensure the live stop-silence update lets longer natural pauses continue the utterance."""
+
+    detector = OpenMicVoiceDetector(
+        audio_format=AudioFormatSpec(rate=16000, width=2, channels=1),
+        detector=FakeSpeechDetector([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+        frame_ms=30,
+        pre_roll_ms=30,
+        speech_pad_ms=0,
+        start_window_frames=2,
+        start_trigger_frames=2,
+        stop_silence_frames=2,
+    )
+
+    frames = [build_pcm_frame(index + 1) for index in range(6)]
+    detector.process_audio_chunk(frames[0])
+    detector.process_audio_chunk(frames[1])
+
+    # A 2-frame hangover would already have stopped; extend it live to 4 frames.
+    detector.set_stop_silence_frames(4)
+
+    third = detector.process_audio_chunk(build_pcm_frame(0))
+    fourth = detector.process_audio_chunk(build_pcm_frame(0))
+    fifth = detector.process_audio_chunk(build_pcm_frame(0))
+    sixth = detector.process_audio_chunk(build_pcm_frame(0))
+
+    assert third.should_stop_stream is False
+    assert fourth.should_stop_stream is False
+    assert fifth.should_stop_stream is False
+    assert sixth.should_stop_stream is True

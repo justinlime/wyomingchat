@@ -576,7 +576,9 @@ class MultiOutputPlayer(QObject):
     def _schedule_drain_stop(self) -> None:
         """Schedule playback shutdown after the currently queued audio is expected to drain."""
 
-        drain_delay = max(100, int(self._estimated_buffer_ms) + 150)
+        # Keep the margin small so sentence-to-sentence chaining feels gapless while
+        # still leaving room for scheduler jitter so the tail is never cut off.
+        drain_delay = max(80, int(self._estimated_buffer_ms) + 100)
         self._drain_timer.start(drain_delay)
 
     # Usage: react to Qt playback state changes, primarily to surface sink errors while streaming.
