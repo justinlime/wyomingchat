@@ -39,6 +39,36 @@ def build_window(tmp_path) -> tuple[BridgeController, object]:
     return controller, window
 
 
+# Usage: verify the Log tab records INFO entries, deduplicates error mirrors, and honors the visibility filters.
+# Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
+# Return: None.
+def test_log_tab_shows_info_and_filters_entries(tmp_path, qapp) -> None:
+    """Ensure info entries appear and the Info/Errors checkboxes filter the log pane."""
+
+    controller, window = build_window(tmp_path)
+    controller.status_changed.emit("bridge started")
+    controller.error_changed.emit("boom")
+    # The controller emits failures through both channels; the duplicate INFO
+    # copy that immediately follows the ERROR must not be logged twice.
+    controller.status_changed.emit("boom")
+
+    text = window._error_edit.toPlainText()
+    assert "bridge started" in text
+    assert text.count("boom") == 1
+
+    # Hide errors: only the info line remains.
+    window._show_error_log_checkbox.setChecked(False)
+    text = window._error_edit.toPlainText()
+    assert "bridge started" in text
+    assert "boom" not in text
+
+    # Hide info too: the pane is empty.
+    window._show_info_log_checkbox.setChecked(False)
+    assert window._error_edit.toPlainText() == ""
+
+    window.close()
+
+
 # Usage: verify the Errors tab appends timestamped log entries instead of replacing the previous error.
 # Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
 # Return: None.

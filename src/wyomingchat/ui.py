@@ -6,7 +6,7 @@ import textwrap
 import time
 
 from PySide6.QtCore import QPoint, Qt, QSize
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -72,6 +72,9 @@ class MainWindow(QMainWindow):
         self._catalog = catalog
         self._loaded_config = AppConfig()
         self._available_tts_voices: list[TtsVoiceConfig] = []
+        self._log_entries: list[tuple[str, str]] = []
+        self._show_info_log = True
+        self._show_error_log = True
         self.setWindowTitle(APP_NAME)
         self.resize(900, 680)
         self.setMinimumSize(780, 580)
@@ -611,20 +614,35 @@ class MainWindow(QMainWindow):
 
         self._error_edit = QPlainTextEdit()
         self._error_edit.setReadOnly(True)
-        # Keep the in-app error log bounded so long sessions do not grow it without limit.
+        # Terminal-style log styling: black background with level-colored text.
+        self._error_edit.setStyleSheet(
+            "QPlainTextEdit { background-color: #000000; color: #c8c8c8;"
+            " selection-background-color: #264f78; }"
+        )
+        # Keep the in-app log bounded so long sessions do not grow it without limit.
         self._error_edit.document().setMaximumBlockCount(1000)
 
         error_page = QWidget()
         error_layout = QVBoxLayout(error_page)
         error_layout.setContentsMargins(0, 0, 0, 0)
         error_layout.addWidget(self._error_edit)
+
+        log_controls = QHBoxLayout()
+        log_controls.addWidget(QLabel("Show:"))
+        self._show_info_log_checkbox = QCheckBox("Info")
+        self._show_info_log_checkbox.setChecked(True)
+        self._show_info_log_checkbox.toggled.connect(self._handle_log_filter_toggled)
+        log_controls.addWidget(self._show_info_log_checkbox)
+        self._show_error_log_checkbox = QCheckBox("Errors")
+        self._show_error_log_checkbox.setChecked(True)
+        self._show_error_log_checkbox.toggled.connect(self._handle_log_filter_toggled)
+        log_controls.addWidget(self._show_error_log_checkbox)
+        log_controls.addStretch(1)
         self._clear_error_log_button = QPushButton("Clear log")
-        self._clear_error_log_button.clicked.connect(self._error_edit.clear)
-        error_layout.addWidget(
-            self._clear_error_log_button,
-            alignment=Qt.AlignmentFlag.AlignRight,
-        )
-        pane.addTab(error_page, "Error Log")
+        self._clear_error_log_button.clicked.connect(self._clear_error_log)
+        log_controls.addWidget(self._clear_error_log_button)
+        error_layout.addLayout(log_controls)
+        pane.addTab(error_page, "Log")
 
         return pane
 
@@ -1019,13 +1037,14 @@ class MainWindow(QMainWindow):
         self._controller.save_configuration(config)
         self._controller.install_virtual_microphone_from_config()
 
-    # Usage: update the status bar when the controller emits a new human-readable status message.
+    # Usage: update the status bar when the controller emits a new human-readable status message and record it as an info log entry.
     # Parameters: message - the status text that should be shown in the status bar.
     # Return: None.
     def _handle_status_changed(self, message: str) -> None:
-        """Display the latest controller status in the window status bar."""
+        """Display the latest controller status and append it to the log as INFO."""
 
         self._status_bar.showMessage(message)
+        self._append_log_entry("INFO", message)
 
     # Usage: accept a fresh list of discovered TTS voices from the controller and keep the current UI selection when possible.
     # Parameters: voices - the selectable voice options returned by the Wyoming TTS server.
@@ -1097,21 +1116,81 @@ class MainWindow(QMainWindow):
 
         self._final_transcript_edit.setPlainText(text)
 
-    # Usage: append the latest controller error to the scrollable error log with a timestamp.
+    # Usage: append the latest controller error to the scrollable log with a timestamp.
     # Parameters: text - the error message to log; empty messages clear nothing and are ignored.
     # Return: None.
     def _handle_error_changed(self, text: str) -> None:
-        """Append controller errors to the persistent in-app error log."""
+        """Append controller errors to the persistent in-app log as ERROR entries."""
+
+        self._append_log_entry("ERROR", text)
+
+    # Usage: record one log entry, deduplicating an info message that immediately mirrors an error.
+    # Parameters: level - the log level label such as INFO or ERROR; text - the message text.
+    # Return: None.
+    def _append_log_entry(self, level: str, text: str) -> None:
+        """Append a timestamped entry to the in-app log and refresh the visible view."""
 
         normalized_text = str(text).strip()
         if not normalized_text:
             return
 
-        self._error_edit.appendPlainText(f"[{time.strftime('%H:%M:%S')}] {normalized_text}")
-        # Keep the newest entry visible so the user immediately sees the error.
+        # The controller emits many failures through both status_changed and
+        # error_changed; skip the duplicate INFO copy that immediately follows.
+        if level == "INFO" and self._log_entries and self._log_entries[-1][0] == "ERROR":
+            if self._log_entries[-1][1].endswith(normalized_text):
+                return
+
+        self._log_entries.append((level, f"[{time.strftime('%H:%M:%S')}] {normalized_text}"))
+        if len(self._log_entries) > 1000:
+            del self._log_entries[: len(self._log_entries) - 1000]
+
+        self._refresh_log_view()
+
+    # Usage: rebuild the visible log contents from the in-memory entries using the current filter checkboxes.
+    # Parameters: none.
+    # Return: None.
+    def _refresh_log_view(self) -> None:
+        """Render the filtered in-memory log entries into the log pane."""
+
+        self._error_edit.clear()
+        info_format = QTextCharFormat()
+        info_format.setForeground(QColor("#c8c8c8"))
+        error_format = QTextCharFormat()
+        error_format.setForeground(QColor("#ff6b6b"))
+        for level, line in self._log_entries:
+            if level == "INFO" and not self._show_info_log:
+                continue
+            if level == "ERROR" and not self._show_error_log:
+                continue
+            cursor = self._error_edit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText(line + "\n", error_format if level == "ERROR" else info_format)
+            self._error_edit.setTextCursor(cursor)
+
+        # Keep the newest entry visible so the user immediately sees new activity.
         scrollbar = self._error_edit.verticalScrollBar()
         if scrollbar is not None:
             scrollbar.setValue(scrollbar.maximum())
+
+    # Usage: re-render the log after the user toggles the Info or Errors filter checkboxes.
+    # Parameters: checked - the new checkbox state, ignored since both boxes are read from their current state.
+    # Return: None.
+    def _handle_log_filter_toggled(self, checked: bool) -> None:
+        """Apply the Info/Errors visibility filters to the log pane."""
+
+        del checked
+        self._show_info_log = self._show_info_log_checkbox.isChecked()
+        self._show_error_log = self._show_error_log_checkbox.isChecked()
+        self._refresh_log_view()
+
+    # Usage: clear every recorded log entry and the visible log pane.
+    # Parameters: none.
+    # Return: None.
+    def _clear_error_log(self) -> None:
+        """Reset the in-app log for a fresh troubleshooting session."""
+
+        self._log_entries.clear()
+        self._error_edit.clear()
 
     # Usage: stop background workers cleanly when the main window is being closed.
     # Parameters: event - the Qt close event emitted by the window manager.
