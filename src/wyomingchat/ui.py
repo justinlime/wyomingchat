@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -55,7 +55,8 @@ class MainWindow(QMainWindow):
         self._loaded_config = AppConfig()
         self._available_tts_voices: list[TtsVoiceConfig] = []
         self.setWindowTitle(APP_NAME)
-        self.resize(980, 760)
+        self.resize(900, 680)
+        self.setMinimumSize(780, 580)
         self._build_window()
         self._connect_controller_signals()
 
@@ -68,38 +69,70 @@ class MainWindow(QMainWindow):
         root = QWidget(self)
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(10)
 
-        self._state_label = QLabel("State: idle")
-        self._monitoring_status_label = QLabel("Open microphone: inactive")
-        self._virtual_mic_status_label = QLabel(
-            "Virtual microphone: not configured"
-            if virtual_mic_mode() is not None
-            else "Virtual microphone: not supported on this platform"
-        )
-        layout.addWidget(self._state_label)
-        layout.addWidget(self._monitoring_status_label)
-        layout.addWidget(self._virtual_mic_status_label)
+        layout.addWidget(self._build_status_header())
 
-        layout.addWidget(self._build_service_group())
-        layout.addWidget(self._build_audio_group())
-        layout.addWidget(self._build_microphone_gate_group())
-        layout.addWidget(self._build_virtual_microphone_group())
-        layout.addWidget(self._build_actions_group())
-        layout.addWidget(self._build_status_group(), stretch=1)
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_service_tab(), "Services")
+        self._tabs.addTab(self._build_audio_tab(), "Audio")
+        self._tabs.addTab(self._build_microphone_tab(), "Microphone")
+        self._tabs.addTab(self._build_virtual_mic_tab(), "Virtual Mic")
+        layout.addWidget(self._tabs)
+
+        layout.addWidget(self._build_actions_row())
+        layout.addWidget(self._build_session_pane(), stretch=1)
 
         self._status_bar = QStatusBar(self)
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
 
-    # Usage: build the UI section containing STT and TTS service address fields.
+    # Usage: build the compact status header with state, live mic level, gate, and monitoring indicators.
     # Parameters: none.
-    # Return: a QGroupBox containing the service endpoint form.
-    def _build_service_group(self) -> QGroupBox:
-        """Create the service endpoint configuration section."""
+    # Return: a QWidget row containing the live status indicators.
+    def _build_status_header(self) -> QWidget:
+        """Create the compact always-visible status header row."""
 
-        group = QGroupBox("Wyoming Services")
-        layout = QFormLayout(group)
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(4, 0, 4, 0)
+        header_layout.setSpacing(12)
+
+        self._state_label = QLabel("State: idle")
+        self._state_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(self._state_label)
+
+        self._mic_level_bar = QProgressBar()
+        self._mic_level_bar.setRange(0, 100)
+        self._mic_level_bar.setValue(0)
+        self._mic_level_bar.setFormat("%p%")
+        self._mic_level_bar.setMinimumWidth(120)
+        self._mic_level_bar.setMaximumWidth(180)
+        self._mic_level_value_label = QLabel("0%")
+        header_layout.addWidget(self._mic_level_bar)
+        header_layout.addWidget(self._mic_level_value_label)
+
+        self._mic_gate_state_label = QLabel("Gate closed")
+        header_layout.addWidget(self._mic_gate_state_label)
+
+        header_layout.addStretch(1)
+
+        self._monitoring_status_label = QLabel("Open microphone: inactive")
+        header_layout.addWidget(self._monitoring_status_label)
+
+        return header
+
+    # Usage: build the tab containing STT and TTS service address fields.
+    # Parameters: none.
+    # Return: a QWidget page containing the service endpoint form.
+    def _build_service_tab(self) -> QWidget:
+        """Create the service endpoint configuration tab."""
+
+        page = QWidget()
+        layout = QFormLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setVerticalSpacing(10)
 
         self._stt_host_edit = QLineEdit()
         self._stt_port_spin = QSpinBox()
@@ -110,6 +143,9 @@ class MainWindow(QMainWindow):
         self._tts_voice_combo = QComboBox()
         self._refresh_tts_voices_button = QPushButton("Query Voices")
         self._refresh_tts_voices_button.clicked.connect(self._handle_refresh_tts_voices_clicked)
+        self._refresh_tts_voices_button.setToolTip(
+            "Send a Wyoming describe/info request to the configured TTS server and pick a specific voice when the server advertises one."
+        )
 
         tts_voice_row = QWidget()
         tts_voice_layout = QHBoxLayout(tts_voice_row)
@@ -117,56 +153,53 @@ class MainWindow(QMainWindow):
         tts_voice_layout.addWidget(self._tts_voice_combo, stretch=1)
         tts_voice_layout.addWidget(self._refresh_tts_voices_button)
 
-        helper = QLabel(
-            "Use Query Voices to send a Wyoming describe/info request to the configured TTS server and pick a specific voice when the server advertises one."
-        )
-        helper.setWordWrap(True)
-
         layout.addRow("STT host", self._stt_host_edit)
         layout.addRow("STT port", self._stt_port_spin)
         layout.addRow("TTS host", self._tts_host_edit)
         layout.addRow("TTS port", self._tts_port_spin)
         layout.addRow("TTS voice", tts_voice_row)
-        layout.addRow(helper)
-        return group
+        return page
 
-    # Usage: build the UI section containing microphone and playback selectors.
+    # Usage: build the tab containing microphone and playback selectors.
     # Parameters: none.
-    # Return: a QGroupBox containing the audio device widgets.
-    def _build_audio_group(self) -> QGroupBox:
-        """Create the audio device selection section."""
+    # Return: a QWidget page containing the audio device widgets.
+    def _build_audio_tab(self) -> QWidget:
+        """Create the audio device selection tab."""
 
-        group = QGroupBox("Audio Devices")
-        layout = QVBoxLayout(group)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         form = QFormLayout()
         self._input_combo = QComboBox()
         form.addRow("Open microphone input", self._input_combo)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel("Playback outputs"))
+        layout.addWidget(QLabel("Playback outputs (check any you want TTS audio to play through)"))
         self._output_list = QListWidget()
         self._output_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self._output_list.setMaximumHeight(200)
         layout.addWidget(self._output_list)
 
-        helper = QLabel(
-            "Tip: choose only your real speaker or headphone outputs here. When the managed PipeWire virtual microphone is enabled and available, the app now routes TTS into its loopback sink automatically."
+        hint = QLabel(
+            "Tip: choose your real speakers or headphones here. The virtual microphone target is added automatically when enabled."
         )
-        helper.setWordWrap(True)
-        layout.addWidget(helper)
-        return group
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        layout.addWidget(hint)
+        return page
 
-    # Usage: build the UI section containing PipeWire virtual microphone settings and actions.
+    # Usage: build the tab containing the microphone noise gate controls.
     # Parameters: none.
-    # Return: a QGroupBox containing virtual microphone fields and the install action.
-    # Usage: build the UI section containing the adjustable microphone noise gate and live input meter.
-    # Parameters: none.
-    # Return: a QGroupBox containing the gate threshold slider and real-time level widgets.
-    def _build_microphone_gate_group(self) -> QGroupBox:
-        """Create the microphone gate controls and live input-meter section."""
+    # Return: a QWidget page containing the gate threshold slider.
+    def _build_microphone_tab(self) -> QWidget:
+        """Create the microphone gate configuration tab."""
 
-        group = QGroupBox("Microphone Gate")
-        layout = QFormLayout(group)
+        page = QWidget()
+        layout = QFormLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setVerticalSpacing(12)
 
         self._mic_gate_slider = QSlider(Qt.Orientation.Horizontal)
         self._mic_gate_slider.setRange(0, 100)
@@ -180,55 +213,51 @@ class MainWindow(QMainWindow):
         slider_layout.addWidget(self._mic_gate_slider, stretch=1)
         slider_layout.addWidget(self._mic_gate_value_label)
 
-        self._mic_level_bar = QProgressBar()
-        self._mic_level_bar.setRange(0, 100)
-        self._mic_level_bar.setValue(0)
-        self._mic_level_bar.setFormat("%p%")
-        self._mic_level_value_label = QLabel("0%")
-
-        meter_row = QWidget()
-        meter_layout = QHBoxLayout(meter_row)
-        meter_layout.setContentsMargins(0, 0, 0, 0)
-        meter_layout.addWidget(self._mic_level_bar, stretch=1)
-        meter_layout.addWidget(self._mic_level_value_label)
-
-        self._mic_gate_state_label = QLabel("Gate closed")
-        helper = QLabel(
+        hint = QLabel(
             "Increase the gate if quiet background sounds or button taps keep triggering the app. "
-            "Watch the live mic level while the room is quiet, then set the gate slightly above that background level."
+            "Watch the live mic level in the header while the room is quiet, then set the gate slightly above that background level."
         )
-        helper.setWordWrap(True)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
 
         layout.addRow("Start speech above", slider_row)
-        layout.addRow("Live mic level", meter_row)
-        layout.addRow("Gate state", self._mic_gate_state_label)
-        layout.addRow(helper)
-        return group
+        layout.addRow(hint)
+        return page
 
-    # Usage: build the UI section containing virtual microphone settings and actions for the current platform.
+    # Usage: build the tab containing virtual microphone settings for the current platform.
     # Parameters: none.
-    # Return: a QGroupBox containing the virtual microphone fields and actions.
-    def _build_virtual_microphone_group(self) -> QGroupBox:
-        """Create the virtual microphone configuration section for this platform."""
+    # Return: a QWidget page containing the virtual microphone form.
+    def _build_virtual_mic_tab(self) -> QWidget:
+        """Create the virtual microphone configuration tab for this platform."""
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        self._virtual_mic_status_label = QLabel(
+            "Virtual microphone: not configured"
+            if virtual_mic_mode() is not None
+            else "Virtual microphone: not supported on this platform"
+        )
+        layout.addWidget(self._virtual_mic_status_label)
 
         mic_mode = virtual_mic_mode()
-        group_title = "PipeWire Virtual Microphone" if mic_mode == "pipewire" else "Virtual Microphone"
-        group = QGroupBox(group_title)
-        layout = QFormLayout(group)
-
+        form = QFormLayout()
         if mic_mode == "pipewire":
-            self._build_pipewire_virtual_mic_form(layout)
+            self._build_pipewire_virtual_mic_form(form)
         elif mic_mode == "cable":
-            self._build_cable_virtual_mic_form(layout)
+            self._build_cable_virtual_mic_form(form)
         else:
             unsupported_note = QLabel(
                 f"The virtual microphone feature is not supported on {platform_label()}. "
                 f"Select a normal speaker or headphone output for synthesized speech instead."
             )
             unsupported_note.setWordWrap(True)
-            layout.addRow(unsupported_note)
-
-        return group
+            form.addRow(unsupported_note)
+        layout.addLayout(form)
+        layout.addStretch(1)
+        return page
 
     # Usage: build the Linux/PipeWire virtual microphone form fields and actions.
     # Parameters: layout - the QFormLayout that should receive the PipeWire widgets.
@@ -241,19 +270,16 @@ class MainWindow(QMainWindow):
         self._virtual_mic_description_edit = QLineEdit()
         self._install_virtual_mic_button = QPushButton("Write PipeWire Config")
         self._install_virtual_mic_button.clicked.connect(self._handle_install_virtual_mic_clicked)
-
-        helper = QLabel(
-            "This writes a PipeWire loopback configuration that creates a playback sink and a linked microphone-like source. "
-            "The virtual microphone carries only the app's synthesized TTS output, not the user's live microphone. "
-            "After writing the config, restart pipewire, pipewire-pulse, and wireplumber so the app can route TTS into the managed sink automatically."
+        self._install_virtual_mic_button.setToolTip(
+            "Writes a PipeWire loopback config creating a playback sink and a linked microphone-like source. "
+            "The virtual mic carries only the app's TTS output. "
+            "Restart pipewire, pipewire-pulse, and wireplumber after writing the config."
         )
-        helper.setWordWrap(True)
 
         layout.addRow("Enabled", self._virtual_mic_enabled_checkbox)
         layout.addRow("PipeWire node name", self._virtual_mic_node_name_edit)
         layout.addRow("Description", self._virtual_mic_description_edit)
         layout.addRow("Install/update", self._install_virtual_mic_button)
-        layout.addRow(helper)
 
     # Usage: build the Windows virtual audio cable form fields and actions.
     # Parameters: layout - the QFormLayout that should receive the cable widgets.
@@ -265,6 +291,11 @@ class MainWindow(QMainWindow):
         self._virtual_cable_combo = QComboBox()
         self._refresh_cables_button = QPushButton("Refresh Cables")
         self._refresh_cables_button.clicked.connect(self._handle_refresh_cables_clicked)
+        self._refresh_cables_button.setToolTip("Re-scan audio devices after installing or updating a virtual audio cable driver.")
+        self._virtual_cable_combo.setToolTip(
+            "Install a free virtual audio cable once (VB-CABLE at vb-audio.com/Cable or Voicemeeter), "
+            "then pick its playback endpoint. Other apps can then select the cable's microphone endpoint."
+        )
 
         cable_row = QWidget()
         cable_layout = QHBoxLayout(cable_row)
@@ -272,18 +303,8 @@ class MainWindow(QMainWindow):
         cable_layout.addWidget(self._virtual_cable_combo, stretch=1)
         cable_layout.addWidget(self._refresh_cables_button)
 
-        helper = QLabel(
-            "Install a free virtual audio cable once - VB-CABLE (free donationware, vb-audio.com/Cable) "
-            "or Voicemeeter (free, vb-audio.com/Voicemeeter) - then enable this option. "
-            "The app plays TTS into the cable's playback endpoint, and the cable's paired microphone endpoint becomes "
-            "selectable in other applications. The virtual microphone carries only the app's synthesized TTS output, "
-            "not your live microphone audio."
-        )
-        helper.setWordWrap(True)
-
         layout.addRow("Enabled", self._virtual_mic_enabled_checkbox)
         layout.addRow("Cable playback endpoint", cable_row)
-        layout.addRow(helper)
 
     # Usage: refresh audio device metadata and repopulate the virtual cable selector.
     # Parameters: none.
@@ -294,14 +315,15 @@ class MainWindow(QMainWindow):
         self._loaded_config = self.collect_config_from_form()
         self._controller.refresh_devices()
 
-    # Usage: build the section that exposes save, refresh, and PipeWire management actions.
+    # Usage: build the row containing save and refresh actions.
     # Parameters: none.
-    # Return: a QGroupBox containing action buttons.
-    def _build_actions_group(self) -> QGroupBox:
-        """Create the action buttons for saving configuration and refreshing devices."""
+    # Return: a QWidget row containing the action buttons.
+    def _build_actions_row(self) -> QWidget:
+        """Create the save and refresh action buttons."""
 
-        group = QGroupBox("Actions")
-        layout = QHBoxLayout(group)
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 0, 4, 0)
 
         self._save_button = QPushButton("Save Configuration")
         self._save_button.clicked.connect(self._handle_save_clicked)
@@ -311,31 +333,29 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._save_button)
         layout.addWidget(self._refresh_devices_button)
         layout.addStretch(1)
-        return group
+        return row
 
-    # Usage: build the transcript and error display widgets shown at the bottom of the window.
+    # Usage: build the transcript and error display pane at the bottom of the window.
     # Parameters: none.
-    # Return: a QGroupBox containing read-only transcript and error panes.
-    def _build_status_group(self) -> QGroupBox:
-        """Create the transcript and error display section."""
+    # Return: a QTabWidget containing read-only transcript and error pages.
+    def _build_session_pane(self) -> QTabWidget:
+        """Create the session transcript and error tabs."""
 
-        group = QGroupBox("Session Status")
-        layout = QVBoxLayout(group)
+        pane = QTabWidget()
 
         self._partial_transcript_edit = QPlainTextEdit()
         self._partial_transcript_edit.setReadOnly(True)
+        pane.addTab(self._partial_transcript_edit, "Partial transcript")
+
         self._final_transcript_edit = QPlainTextEdit()
         self._final_transcript_edit.setReadOnly(True)
+        pane.addTab(self._final_transcript_edit, "Final transcript")
+
         self._error_edit = QPlainTextEdit()
         self._error_edit.setReadOnly(True)
+        pane.addTab(self._error_edit, "Errors")
 
-        layout.addWidget(QLabel("Partial transcript"))
-        layout.addWidget(self._partial_transcript_edit)
-        layout.addWidget(QLabel("Final transcript"))
-        layout.addWidget(self._final_transcript_edit)
-        layout.addWidget(QLabel("Errors"))
-        layout.addWidget(self._error_edit)
-        return group
+        return pane
 
     # Usage: connect controller output signals to UI update handlers.
     # Parameters: none.
