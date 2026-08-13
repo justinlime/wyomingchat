@@ -143,6 +143,25 @@ def test_set_stop_silence_ms_updates_live_detector(tmp_path) -> None:
 # Usage: verify that streamed TTS chunks reach the player incrementally, not in a burst at the end.
 # Parameters: tmp_path - pytest fixture; qapp - module-level Qt app fixture.
 # Return: None.
+def test_tts_streaming_support_flag_flows_into_tts_sessions(tmp_path) -> None:
+    """Ensure the server's streaming capability is recorded and passed to new TTS sessions."""
+
+    controller = build_controller(tmp_path)
+
+    # Ignore stale results from older generations.
+    controller._handle_tts_streaming_support(controller._tts_voice_query_generation - 1, True)
+    assert controller._tts_streaming_supported is False
+
+    controller._handle_tts_streaming_support(controller._tts_voice_query_generation, True)
+    assert controller._tts_streaming_supported is True
+
+    controller._handle_tts_streaming_support(controller._tts_voice_query_generation, False)
+    assert controller._tts_streaming_supported is False
+
+
+# Usage: verify that streamed TTS chunks reach the player incrementally, not in a burst at the end.
+# Parameters: tmp_path - pytest fixture; qapp - module-level Qt app fixture.
+# Return: None.
 def test_tts_chunks_stream_incrementally(tmp_path, qapp) -> None:
     """Ensure a paced Wyoming TTS server results in paced playback writes."""
 

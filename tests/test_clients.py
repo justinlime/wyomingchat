@@ -5,7 +5,9 @@ from __future__ import annotations
 from wyomingchat.audio_types import AudioFormatSpec
 from wyomingchat.clients import (
     SpeechToTextSession,
+    TextToSpeechSession,
     build_tts_synthesize_event_data,
+    parse_tts_streaming_supported_from_info,
     parse_tts_voices_from_info,
 )
 from wyomingchat.config import ServiceEndpoint, TtsVoiceConfig
@@ -292,6 +294,173 @@ def test_stt_read_loop_uses_partial_transcript_when_server_closes_after_finish()
 
     assert final_texts == ["repeat phrase"]
     assert errors == []
+
+
+# Usage: build a minimal TTS session for unit tests while allowing its Wyoming connection to be swapped with a fake.
+# Parameters: text - the text to synthesize; streaming - whether the session should use the streaming synthesize protocol; received_events - events the fake connection returns to the reader loop.
+# Return: a TextToSpeechSession configured with no-op audio/complete callbacks and an error recorder.
+def build_test_tts_session(
+    text: str = "hello world",
+    streaming: bool = False,
+    received_events: list[WyomingEvent | None] | None = None,
+):
+    """Return a TextToSpeechSession configured for isolated unit tests."""
+
+    audio_starts: list[AudioFormatSpec] = []
+    audio_chunks: list[bytes] = []
+    errors: list[str] = []
+    completions: list[bool] = []
+
+    session = TextToSpeechSession(
+        endpoint=ServiceEndpoint(host="127.0.0.1", port=10301),
+        text=text,
+        voice=None,
+        on_audio_start=audio_starts.append,
+        on_audio_chunk=audio_chunks.append,
+        on_error=errors.append,
+        on_complete=lambda: completions.append(True),
+        streaming=streaming,
+    )
+    session._connection = FakeWyomingConnection(received_events)
+    return session, audio_starts, audio_chunks, errors, completions
+
+
+# Usage: verify that a Wyoming info payload advertising streaming synthesis support is detected.
+# Parameters: none.
+# Return: None.
+def test_parse_tts_streaming_supported_from_info_detects_advertised_support() -> None:
+    """Ensure the streaming-synthesis capability flag is read from TTS programs."""
+
+    assert parse_tts_streaming_supported_from_info(
+        {
+            "tts": [
+                {
+                    "name": "kokoro-server",
+                    "supports_synthesize_streaming": True,
+                    "voices": [],
+                }
+            ]
+        }
+    ) is True
+
+
+# Usage: verify that an info payload without the streaming flag is treated as non-streaming.
+# Parameters: none.
+# Return: None.
+def test_parse_tts_streaming_supported_from_info_defaults_to_false() -> None:
+    """Ensure older info payloads without the flag fall back to single-shot synthesis."""
+
+    assert parse_tts_streaming_supported_from_info({"tts": [{"name": "piper", "voices": []}]}) is False
+    assert parse_tts_streaming_supported_from_info({}) is False
+    assert parse_tts_streaming_supported_from_info({"tts": "not-a-list"}) is False
+
+
+# Usage: verify that a streaming TTS session sends the full streaming synthesize event sequence.
+# Parameters: none.
+# Return: None.
+def test_tts_streaming_session_sends_streaming_event_sequence() -> None:
+    """Ensure streaming sessions send synthesize-start/chunk/stop with the back-compat synthesize event."""
+
+    session, _, _, _, _ = build_test_tts_session(
+        text="hello world",
+        streaming=True,
+        received_events=[
+            WyomingEvent(type="audio-start", data={"rate": 16000, "width": 2, "channels": 1}),
+            WyomingEvent(type="audio-stop", data={}),
+            WyomingEvent(type="synthesize-stopped", data={}),
+        ],
+    )
+    session._connection.connected = True
+
+    session._read_loop()
+
+    assert [event.type for event in session._connection.sent_events] == [
+        "synthesize-start",
+        "synthesize-chunk",
+        "synthesize",
+        "synthesize-stop",
+    ]
+    assert session._connection.sent_events[0].data == {}
+    assert session._connection.sent_events[1].data == {"text": "hello world"}
+    assert session._connection.sent_events[2].data == {"text": "hello world"}
+    assert session._connection.sent_events[3].data == {}
+
+
+# Usage: verify that a streaming TTS session survives multiple audio groups and terminates on synthesize-stopped.
+# Parameters: none.
+# Return: None.
+def test_tts_streaming_session_handles_multiple_audio_streams() -> None:
+    """Ensure streaming sessions continue past per-sentence audio-stop events until synthesize-stopped."""
+
+    session, audio_starts, audio_chunks, errors, completions = build_test_tts_session(
+        streaming=True,
+        received_events=[
+            WyomingEvent(type="audio-start", data={"rate": 16000, "width": 2, "channels": 1}),
+            WyomingEvent(type="audio-chunk", data={}, payload=b"first"),
+            WyomingEvent(type="audio-stop", data={}),
+            WyomingEvent(type="audio-start", data={"rate": 16000, "width": 2, "channels": 1}),
+            WyomingEvent(type="audio-chunk", data={}, payload=b"second"),
+            WyomingEvent(type="audio-stop", data={}),
+            WyomingEvent(type="synthesize-stopped", data={}),
+        ],
+    )
+    session._connection.connected = True
+
+    session._read_loop()
+
+    assert session._completed.is_set()
+    assert [chunk for chunk in audio_chunks] == [b"first", b"second"]
+    assert len(audio_starts) == 1, "only the first audio-start should be forwarded to playback"
+    assert errors == []
+    assert completions == [True]
+
+
+# Usage: verify that a streaming TTS session forwards the selected voice on synthesize-start and the back-compat synthesize event.
+# Parameters: none.
+# Return: None.
+def test_tts_streaming_session_includes_selected_voice() -> None:
+    """Ensure the streaming handshake carries the voice selection where the protocol expects it."""
+
+    session, _, _, _, _ = build_test_tts_session(text="hi", streaming=True)
+    session._voice = TtsVoiceConfig(name="kokoro", language="en", speaker="bella")
+    session._connection.connected = True
+
+    session._read_loop()
+
+    assert session._connection.sent_events[0].data == {
+        "voice": {"name": "kokoro", "language": "en", "speaker": "bella"}
+    }
+    assert session._connection.sent_events[2].data["voice"] == {
+        "name": "kokoro",
+        "language": "en",
+        "speaker": "bella",
+    }
+
+
+# Usage: verify that a single-shot TTS session still terminates on the first audio-stop.
+# Parameters: none.
+# Return: None.
+def test_tts_single_shot_session_terminates_on_first_audio_stop() -> None:
+    """Ensure non-streaming sessions keep the original audio-stop completion behavior."""
+
+    session, audio_starts, audio_chunks, errors, completions = build_test_tts_session(
+        streaming=False,
+        received_events=[
+            WyomingEvent(type="audio-start", data={"rate": 22050, "width": 2, "channels": 1}),
+            WyomingEvent(type="audio-chunk", data={}, payload=b"data"),
+            WyomingEvent(type="audio-stop", data={}),
+        ],
+    )
+    session._connection.connected = True
+
+    session._read_loop()
+
+    assert session._completed.is_set()
+    assert [event.type for event in session._connection.sent_events] == ["synthesize"]
+    assert audio_starts == [AudioFormatSpec(rate=22050, width=2, channels=1)]
+    assert audio_chunks == [b"data"]
+    assert errors == []
+    assert completions == [True]
 
 
 # Usage: verify that synthesize requests include the selected Wyoming voice payload only when a voice is configured.

@@ -121,6 +121,37 @@ def build_tts_synthesize_event_data(text: str, voice: TtsVoiceConfig | None = No
     return request_data
 
 
+# Usage: build the event data dictionary for a Wyoming streaming synthesize-start request, which carries only the optional voice selection.
+# Parameters: voice - the optional voice selection that should be requested from the TTS server.
+# Return: a dictionary suitable for the `synthesize-start` Wyoming event data field.
+def build_tts_synthesize_start_event_data(voice: TtsVoiceConfig | None = None) -> dict[str, Any]:
+    """Return the Wyoming event data used to start a streaming TTS synthesize request."""
+
+    request_data: dict[str, Any] = {}
+    if voice is not None:
+        voice_payload = voice.to_request_payload()
+        if voice_payload is not None:
+            request_data["voice"] = voice_payload
+    return request_data
+
+
+# Usage: inspect a Wyoming info payload for any TTS program that advertises streaming synthesize support.
+# Parameters: info_payload - the decoded data dictionary from an `info` Wyoming event.
+# Return: True when at least one advertised TTS program supports synthesize text streaming.
+def parse_tts_streaming_supported_from_info(info_payload: dict[str, Any]) -> bool:
+    """Return whether the server advertises streaming TTS synthesis support."""
+
+    raw_tts_services = info_payload.get("tts", [])
+    if not isinstance(raw_tts_services, list):
+        return False
+
+    for raw_service in raw_tts_services:
+        if isinstance(raw_service, dict) and bool(raw_service.get("supports_synthesize_streaming", False)):
+            return True
+
+    return False
+
+
 class WyomingTcpConnection:
     """Manage a blocking TCP connection that sends and receives Wyoming events."""
 
@@ -470,8 +501,8 @@ class SpeechToTextSession:
 class TtsVoiceQuerySession:
     """Request Wyoming server capability info and extract selectable TTS voices."""
 
-    # Usage: create a background describe/info query that asks a Wyoming server which TTS voices it supports.
-    # Parameters: endpoint - the Wyoming TTS service address; on_result - callback receiving discovered selectable voices; on_error - callback for terminal query failures; on_complete - callback invoked exactly once when the worker exits.
+    # Usage: create a background describe/info query that asks a Wyoming server which TTS voices it supports and whether it supports streaming synthesis.
+    # Parameters: endpoint - the Wyoming TTS service address; on_result - callback receiving discovered selectable voices; on_streaming_support - optional callback receiving whether the server advertises streaming synthesize support; on_error - callback for terminal query failures; on_complete - callback invoked exactly once when the worker exits.
     # Return: None.
     def __init__(
         self,
@@ -479,11 +510,13 @@ class TtsVoiceQuerySession:
         on_result: Callable[[list[TtsVoiceConfig]], None],
         on_error: Callable[[str], None],
         on_complete: Callable[[], None],
+        on_streaming_support: Callable[[bool], None] | None = None,
     ) -> None:
         """Initialize a voice-discovery query session."""
 
         self._endpoint = endpoint
         self._on_result = on_result
+        self._on_streaming_support = on_streaming_support
         self._callbacks = ClientCallbacks(on_error=on_error, on_complete=on_complete)
         self._connection = WyomingTcpConnection(endpoint)
         self._reader_thread: threading.Thread | None = None
@@ -542,6 +575,9 @@ class TtsVoiceQuerySession:
                 if event.type != "info":
                     continue
 
+                if self._on_streaming_support is not None:
+                    self._on_streaming_support(parse_tts_streaming_supported_from_info(event.data))
+
                 self._on_result(parse_tts_voices_from_info(event.data))
                 self._completed.set()
                 return
@@ -574,7 +610,7 @@ class TextToSpeechSession:
     """Submit text to a Wyoming TTS server and stream back raw PCM audio."""
 
     # Usage: create a text-to-speech session for one synthesized reply.
-    # Parameters: endpoint - the Wyoming TTS service address; text - the text that should be synthesized; voice - the optional Wyoming voice selection to request; on_audio_start - callback with the returned PCM format; on_audio_chunk - callback for streamed audio bytes; on_error - callback for terminal errors; on_complete - callback when synthesis finishes.
+    # Parameters: endpoint - the Wyoming TTS service address; text - the text that should be synthesized; voice - the optional Wyoming voice selection to request; streaming - when True use the streaming synthesize-start/chunk/stop protocol if the server supports it; on_audio_start - callback with the returned PCM format; on_audio_chunk - callback for streamed audio bytes; on_error - callback for terminal errors; on_complete - callback when synthesis finishes.
     # Return: None.
     def __init__(
         self,
@@ -585,12 +621,14 @@ class TextToSpeechSession:
         on_audio_chunk: Callable[[bytes], None],
         on_error: Callable[[str], None],
         on_complete: Callable[[], None],
+        streaming: bool = False,
     ) -> None:
         """Initialize a Wyoming text-to-speech session."""
 
         self._endpoint = endpoint
         self._text = text
         self._voice = voice if voice is not None and voice.is_configured() else None
+        self._streaming = bool(streaming)
         self._on_audio_start = on_audio_start
         self._on_audio_chunk = on_audio_chunk
         self._callbacks = ClientCallbacks(on_error=on_error, on_complete=on_complete)
@@ -642,18 +680,50 @@ class TextToSpeechSession:
             if self._completed.is_set():
                 return
 
-            self._connection.send_event(
-                WyomingEvent(
-                    type="synthesize",
-                    data=build_tts_synthesize_event_data(self._text, self._voice),
+            if self._streaming:
+                # Streaming synthesis: announce the request, stream the text as
+                # chunks, include the backwards-compatible single-shot request so
+                # older servers still process the full text, then end the stream.
+                self._connection.send_event(
+                    WyomingEvent(
+                        type="synthesize-start",
+                        data=build_tts_synthesize_start_event_data(self._voice),
+                    )
                 )
-            )
+                self._connection.send_event(
+                    WyomingEvent(
+                        type="synthesize-chunk",
+                        data={"text": self._text},
+                    )
+                )
+                self._connection.send_event(
+                    WyomingEvent(
+                        type="synthesize",
+                        data=build_tts_synthesize_event_data(self._text, self._voice),
+                    )
+                )
+                self._connection.send_event(WyomingEvent(type="synthesize-stop", data={}))
+            else:
+                self._connection.send_event(
+                    WyomingEvent(
+                        type="synthesize",
+                        data=build_tts_synthesize_event_data(self._text, self._voice),
+                    )
+                )
+
+            audio_started = False
             while not self._completed.is_set():
                 event = self._connection.receive_event()
                 if event is None:
                     break
 
                 if event.type == "audio-start":
+                    # Streaming responses emit one audio-start per synthesized
+                    # sentence, so only forward the first format announcement to
+                    # avoid restarting playback for every sentence.
+                    if audio_started:
+                        continue
+                    audio_started = True
                     self._on_audio_start(
                         AudioFormatSpec(
                             rate=int(event.data.get("rate", 22050)),
@@ -668,6 +738,16 @@ class TextToSpeechSession:
                     continue
 
                 if event.type == "audio-stop":
+                    # A single-shot request is finished after the first audio
+                    # stream ends. A streaming request can produce several
+                    # audio-stop events (one per sentence), so keep reading
+                    # until the terminal synthesize-stopped event arrives.
+                    if not self._streaming:
+                        self._completed.set()
+                        break
+                    continue
+
+                if event.type == "synthesize-stopped":
                     self._completed.set()
                     break
         except (EOFError, OSError) as exc:

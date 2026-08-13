@@ -1,0 +1,146 @@
+{
+  "runId": "0fa5ad60",
+  "agent": "researcher",
+  "task": "Research the Wyoming protocol's STREAMING text-to-speech (TTS) wire format, and the client-side handshake a TTS client must perform to have a Wyoming TTS server treat a request as \"streaming\" instead of a normal single-shot \"Synthesize\".\n\nContext: We are writing a Python client that talks to Wyoming-compatible TTS servers (Rhasspy/Home Assistant ecosystem). The server's logs show our requests are treated as non-streaming \"Synthesize\". We want to switch to the streaming text-synthesis events.\n\nReference material available locally:\n- /home/justinlime/.cache/uv/archive-v0/flAJ2b2_BjfBbVXx1NY23/wyoming/tts.py (wyoming lib 1.8.0) — defines Synthesize, SynthesizeStart, SynthesizeChunk, SynthesizeStop, SynthesizeStopped event classes\n- /home/justinlime/.cache/uv/archive-v0/flAJ2b2_BjfBbVXx1NY23/wyoming/info.py — TtsInfo has a field `supports_synthesize_streaming: bool`\n- /home/justinlime/.cache/uv/archive-v0/flAJ2b2_BjfBbVXx1NY23/wyoming/client.py — check if it has AsyncTtsClient or TtsClient with streaming synthesize methods\n- /home/justinlime/.cache/uv/archive-v0/QH-2nHZrp3xB5iV0gFPFI/wyoming/ (wyoming lib 1.7.1)\n\nPlease answer precisely:\n1. The exact sequence of client→server events for streaming synthesis, and server→client events in response (including where audio-start/audio-chunk/audio-stop and synthesize-stopped appear relative to the client's synthesize-stop).\n2. Whether the client must advertise streaming support somehow (e.g., an info describe exchange, or a flag), or whether sending synthesize-start/chunk/stop is sufficient. Look at how the server dispatches events (check wyoming/server.py or any ServerTts handler in the repo) and how `supports_synthesize_streaming` is set/advertised by servers.\n3. What a client should do if the server does NOT advertise `supports_synthesize_streaming` (fallback to single-shot synthesize?).\n4. Any exact wire-format details: event data fields for synthesize-start (voice dict shape: name/speaker vs language), synthesize-chunk ({\"text\": ...}), synthesize-stop (no data).\n\nIf GitHub is reachable, also check https://github.com/rhasspy/wyoming (docs or protocol.md) and how wyoming-piper or the Home Assistant wyoming TTS providers implement the streaming side, so we can confirm the client handshake. Report concrete findings with the exact event types and data shapes, and cite the local file paths/line numbers you used.",
+  "exitCode": 1,
+  "usage": {
+    "input": 62133,
+    "output": 28157,
+    "cacheRead": 1685120,
+    "cacheWrite": 0,
+    "cost": 0.010650458000000003,
+    "turns": 38
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 62133,
+        "output": 28157,
+        "cacheRead": 1685120,
+        "cacheWrite": 0,
+        "cost": 0.010650458000000003,
+        "turns": 38
+      }
+    }
+  ],
+  "durationMs": 266853,
+  "toolCount": 55,
+  "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "launchContractDigest": "9eb655575979358abfd884aab48201b21beeec3e1874dd343dcf938ee1ce03a1",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings with file paths and line numbers throughout: local wyoming 1.8.0 tts.py:9-171 (event classes), info.py:107-114 (supports_synthesize_streaming), event.py:82-139 (wire frame), audio.py:39-141 (audio events), server.py (generic AsyncEventHandler, no ServerTts), wyoming-1.8.0.dist-info/METADATA:228-238 and 391-410 (official protocol docs); wyoming 1.7.1 tts.py identical classes (diff verified); wyoming-piper handler.py (main) SynthesizeStart/Chunk/Stop/SynthesizeStopped dispatch and __main__.py supports_synthesize_streaming=(not args.no_streaming), v1.5.0 handler (no streaming, rejects other events), v1.6.3 handler+__main__ (opt-in --streaming), CHANGELOG (1.6.0 added streaming, 2.0.0 default-on, 2.1.1 fix); Home Assistant components/wyoming/tts.py (_write_tts_message, _read_tts_audio, async_supports_streaming_input) and components/tts/entity.py:73-76,101-113 (fallback to single-shot); rhasspy/wyoming README.md (master) TTS streaming event list + Event Flow steps 1-7; local project clients.py:573-668 (current single-shot send), clients.py:470-548 (existing describe/info), config.py:184-211."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "diff wyoming-1.8.0/tts.py wyoming-1.7.1/tts.py",
+          "result": "passed",
+          "summary": "Only None-safety asserts differ; streaming event classes identical between 1.7.1 and 1.8.0"
+        },
+        {
+          "command": "grep/find over uv cache archive-v0",
+          "result": "passed",
+          "summary": "Located wyoming 1.8.0 and 1.7.1 packages; no wyoming-server/ServerTts package cached anywhere"
+        },
+        {
+          "command": "fetch raw.githubusercontent.com wyoming-piper handler.py (main, v1.5.0, v1.6.3), __main__.py (main, v1.6.3), CHANGELOG.md",
+          "result": "passed",
+          "summary": "Confirmed streaming dispatch, supports_synthesize_streaming advertisement, and version history"
+        },
+        {
+          "command": "fetch raw.githubusercontent.com home-assistant/core components/wyoming/tts.py + components/tts/entity.py",
+          "result": "passed",
+          "summary": "Confirmed client-side streaming handshake, terminal synthesize-stopped handling, and single-shot fallback"
+        },
+        {
+          "command": "fetch raw.githubusercontent.com rhasspy/wyoming master README.md",
+          "result": "passed",
+          "summary": "Confirmed official event types/data and Event Flow for streaming TTS"
+        }
+      ],
+      "validationOutput": [
+        "Direction of synthesize-stopped cross-checked three ways: official event-flow diagram (server->client), wyoming-piper writes it after final audio, HA reads it as terminal — consistent.",
+        "supports_synthesize_streaming advertisement cross-checked across wyoming-piper main (not no_streaming), v1.6.3 (= args.streaming), and absent pre-1.6.0 (default False).",
+        "Client fallback verified against HA base TextToSpeechEntity.async_stream_tts_audio default (accumulate + async_get_tts_audio)."
+      ],
+      "residualRisks": [
+        "METADATA bullet 'synthesize-stopped - sent back to server after final audio' is ambiguously worded (implies client->server); resolved as server->client via the same doc's event-flow diagram and both reference implementations, but other readers may misread it.",
+        "Servers with streaming disabled (wyoming-piper --no-streaming, or 1.6.x without --streaming) silently ignore synthesize-start/chunk/stop with no error event, so a client that skips the describe/info capability check will hang; recommend an idle timeout as defense-in-depth.",
+        "wyoming-piper <1.6.0 rejects non-synthesize events ('Unexpected event' warning), so streaming against such servers is not just unsupported but logged as an error; the supports_synthesize_streaming flag (missing/False) is the only reliable discriminator.",
+        "GitHub main-branch code (wyoming-piper, HA core, rhasspy/wyoming README) was read at research time and may drift; the local wyoming 1.8.0/1.7.1 library files and the local wyomingchat tree are the stable citations.",
+        "HA's streaming reader ignores trailing audio-stop events and only honors the first audio-start for its WAV header; clients that instead terminate on the last audio-stop may hang or drop the final sentence if a server sends audio-stop per sentence followed only by synthesize-stopped."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Research-only task; no files modified. Local project findings: clients.py:645-648 sends single-shot synthesize and clients.py:661-663 terminates on audio-stop; describe/info capability data already fetched at clients.py:536 but supports_synthesize_streaming is not yet consumed.",
+      "reviewFindings": [
+        "info: wyoming 1.8.0 tts.py:93-171 — streaming is triggered by event type sequence (synthesize-start first), not by any data flag; there is no 'streaming' field on any event.",
+        "info: wyoming/info.py:113-114 — supports_synthesize_streaming defaults to False; missing flag must be treated as unsupported.",
+        "warning: wyoming-piper handler.py (main) — with --no-streaming, streaming events are silently dropped (return True, no audio), so the client must gate on the info flag or add a timeout to avoid a hang.",
+        "info: METADATA:228-238 'synthesize-stopped - sent back to server after final audio' wording conflicts with METADATA:410 event-flow arrow; code (piper writes it, HA reads it) confirms server->client.",
+        "info: HA components/wyoming/tts.py _write_tts_message — back-compat synthesize (full text) must be sent between the last chunk and synthesize-stop.",
+        "warning: wyomingchat clients.py:661-663 — current reader treats audio-stop as terminal; the streaming reader must instead treat synthesize-stopped as terminal and accept multiple audio-start/audio-stop groups."
+      ],
+      "manualNotes": "Key answer: a Wyoming TTS server treats a request as streaming iff the client's first event is synthesize-start (no flag, no special handshake event); the describe->info exchange is the capability gate the client must use to check tts[].supports_synthesize_streaming, and HA refuses the streaming path when it is false. Recommended client sequence: describe->info (check flag) -> synthesize-start(voice) -> synthesize-chunk(text)... -> synthesize(full text) -> synthesize-stop, while concurrently reading audio-start/audio-chunk/audio-stop groups until synthesize-stopped; fall back to single-shot synthesize (accumulate + one synthesize event, end on audio-stop) when the flag is false or absent. Piper history: streaming added 1.6.0 (opt-in --streaming), default-on since 2.0.0 with --no-streaming, bugfix 2.1.1."
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/0fa5ad60_researcher_0_transcript.jsonl",
+  "timestamp": 1786613423574
+}

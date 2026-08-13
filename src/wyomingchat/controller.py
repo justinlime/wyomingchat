@@ -63,6 +63,7 @@ class BridgeController(QObject):
     _tts_voice_query_result_received = Signal(int, object)
     _tts_voice_query_error_received = Signal(int, str)
     _tts_voice_query_complete_received = Signal(int)
+    _tts_streaming_support_received = Signal(int, bool)
     _stt_partial_received = Signal(int, str)
     _stt_final_received = Signal(int, str)
     _stt_error_received = Signal(int, str)
@@ -95,6 +96,7 @@ class BridgeController(QObject):
         self._stt_session: SpeechToTextSession | None = None
         self._tts_session: TextToSpeechSession | None = None
         self._tts_voice_query_session: TtsVoiceQuerySession | None = None
+        self._tts_streaming_supported = False
         self._voice_detector: OpenMicVoiceDetector | None = None
         self._capture_format_spec: AudioFormatSpec | None = None
         self._stt_audio_format_spec: AudioFormatSpec | None = None
@@ -147,6 +149,7 @@ class BridgeController(QObject):
         self._tts_voice_query_result_received.connect(self._apply_tts_voice_query_result)
         self._tts_voice_query_error_received.connect(self._handle_tts_voice_query_error)
         self._tts_voice_query_complete_received.connect(self._handle_tts_voice_query_complete)
+        self._tts_streaming_support_received.connect(self._handle_tts_streaming_support)
         self._stt_partial_received.connect(self._apply_partial_transcript)
         self._stt_final_received.connect(self._apply_final_transcript)
         self._stt_error_received.connect(self._handle_stt_error)
@@ -226,6 +229,10 @@ class BridgeController(QObject):
         query_endpoint = endpoint or self._config.tts_endpoint
         self._tts_voice_query_generation += 1
         query_generation = self._tts_voice_query_generation
+        # Reset streaming capability until the new query reports the actual
+        # server support, so a failed query cannot reuse stale capabilities
+        # from a previously queried endpoint.
+        self._tts_streaming_supported = False
 
         if self._tts_voice_query_session is not None:
             self._tts_voice_query_session.close()
@@ -241,6 +248,10 @@ class BridgeController(QObject):
             on_result=lambda voices, generation=query_generation: self._tts_voice_query_result_received.emit(
                 generation,
                 voices,
+            ),
+            on_streaming_support=lambda supported, generation=query_generation: self._tts_streaming_support_received.emit(
+                generation,
+                supported,
             ),
             on_error=lambda message, generation=query_generation: self._tts_voice_query_error_received.emit(
                 generation,
@@ -354,6 +365,18 @@ class BridgeController(QObject):
 
         self.error_changed.emit(message)
         self.status_changed.emit(message)
+
+    # Usage: store the streaming-synthesis capability advertised by the active TTS voice query.
+    # Parameters: generation - the voice-query generation that reported the capability; supported - True when the server advertises streaming synthesize support.
+    # Return: None.
+    def _handle_tts_streaming_support(self, generation: int, supported: bool) -> None:
+        """Record whether the queried TTS endpoint supports streaming synthesis."""
+
+        if generation != self._tts_voice_query_generation:
+            return
+
+        self._tts_streaming_supported = bool(supported)
+        LOGGER.info("TTS endpoint streaming synthesis support: %s", self._tts_streaming_supported)
 
     # Usage: clear the active voice-query session reference when the latest query worker exits.
     # Parameters: generation - the voice-query generation that completed.
@@ -616,7 +639,11 @@ class BridgeController(QObject):
         self._tts_generation += 1
         tts_generation = self._tts_generation
         self._set_state(STATE_SYNTHESIZING)
-        self.status_changed.emit("Requesting speech synthesis...")
+        self.status_changed.emit(
+            "Requesting streaming speech synthesis..."
+            if self._tts_streaming_supported
+            else "Requesting speech synthesis..."
+        )
         self._tts_chunk_ack = threading.Event()
         self._pre_stream_chunks = []
         self._tts_started_at = time.monotonic()
@@ -625,6 +652,7 @@ class BridgeController(QObject):
             endpoint=self._config.tts_endpoint,
             text=text,
             voice=self._config.tts_voice,
+            streaming=self._tts_streaming_supported,
             on_audio_start=lambda format_spec, generation=tts_generation: self._tts_audio_start_received.emit(generation, format_spec),
             on_audio_chunk=lambda audio_chunk, generation=tts_generation: self._emit_tts_chunk_with_backpressure(audio_chunk, generation),
             on_error=lambda message, generation=tts_generation: self._tts_error_received.emit(generation, message),
