@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .audio_types import AudioFormatSpec
 from .config import ServiceEndpoint, TtsVoiceConfig
+from .constants import WYOMING_CONNECT_TIMEOUT, WYOMING_IO_TIMEOUT
 from .wyoming_protocol import WyomingEvent, decode_event, encode_event
 
 
@@ -135,13 +136,13 @@ class WyomingTcpConnection:
         self._send_lock = threading.Lock()
 
     # Usage: open the TCP socket and create the binary reader used for event decoding.
-    # Parameters: timeout - the socket timeout in seconds applied to connect and I/O operations.
+    # Parameters: timeout - the connect handshake timeout in seconds; io_timeout - the per-operation socket timeout applied after connecting.
     # Return: None.
-    def connect(self, timeout: float = 10.0) -> None:
+    def connect(self, timeout: float = WYOMING_CONNECT_TIMEOUT, io_timeout: float = WYOMING_IO_TIMEOUT) -> None:
         """Open the underlying TCP socket to the Wyoming service."""
 
         self._socket = socket.create_connection((self._endpoint.host, self._endpoint.port), timeout=timeout)
-        self._socket.settimeout(timeout)
+        self._socket.settimeout(io_timeout)
         self._reader = self._socket.makefile("rb")
 
     # Usage: send one Wyoming event over the active TCP socket.

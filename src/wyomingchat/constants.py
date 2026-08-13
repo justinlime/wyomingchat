@@ -35,6 +35,14 @@ MIN_STOP_SILENCE_MS = 500
 DEFAULT_STOP_SILENCE_MS = 2500
 MAX_STOP_SILENCE_MS = 6000
 
+# Wyoming TCP client timeouts.
+WYOMING_CONNECT_TIMEOUT = 10.0
+# How long a single blocking socket I/O operation may sit without data before
+# timing out. Long utterances can leave the STT socket quiet for tens of seconds
+# while the server transcribes (some servers emit only the final transcript), so
+# a tight I/O timeout surfaces as spurious 'speech to text timed out' errors.
+WYOMING_IO_TIMEOUT = 60.0
+
 DEFAULT_VAD_SAMPLE_RATE = 16_000
 DEFAULT_VAD_FRAME_MS = 32
 DEFAULT_VAD_PRE_ROLL_MS = 600

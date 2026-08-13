@@ -266,18 +266,6 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        form = QFormLayout()
-        self._input_combo = QComboBox()
-        self._add_option_row(
-            form,
-            "Open microphone input",
-            self._input_combo,
-            "The microphone used for always-on monitoring. "
-            "The app keeps this device open while running so it can react to speech immediately "
-            "instead of waiting for push-to-talk.",
-        )
-        layout.addLayout(form)
-
         layout.addWidget(
             self._option_label(
                 "Playback outputs",
@@ -345,6 +333,16 @@ class MainWindow(QMainWindow):
         layout = QFormLayout(page)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setVerticalSpacing(12)
+
+        self._input_combo = QComboBox()
+        self._add_option_row(
+            layout,
+            "Open microphone input",
+            self._input_combo,
+            "The microphone used for always-on monitoring. "
+            "The app keeps this device open while running so it can react to speech immediately "
+            "instead of waiting for push-to-talk.",
+        )
 
         self._mic_gate_slider = QSlider(Qt.Orientation.Horizontal)
         self._mic_gate_slider.setRange(0, 100)
