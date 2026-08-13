@@ -1,0 +1,139 @@
+{
+  "runId": "0e1950b4",
+  "agent": "coder",
+  "task": "READ-ONLY code review - do NOT modify any files. Repo: /home/justinlime/code/wyomingchat (Python/PySide6 voice bridge using the Wyoming protocol over TCP).\n\nBUG REPORT: TTS audio only plays after the final chunk is received, instead of playing each chunk as it arrives.\n\nRead carefully:\n- src/wyomingchat/clients.py TextToSpeechSession._read_loop and WyomingTcpConnection: how audio-start, audio-chunk, and audio-stop events are decoded and how the on_audio_start/on_audio_chunk/on_complete callbacks are invoked (which thread, how often).\n- src/wyomingchat/wyoming_protocol.py: encode_event/decode_event and read_exactly - confirm the framing delivers each event independently (no accidental buffering of the whole payload).\n- The controller lambdas passed as callbacks in _start_tts (controller.py) that emit PySide6 Signals from the reader thread.\n\nAnswer with file:line references: (1) Does the reader deliver audio-chunk callbacks immediately per event, or could the socket reads block/accumulate until audio-stop? (2) Is there any per-event payload buffering in decode_event/read_exactly? (3) Could PySide6 queued signal delivery between the reader thread and GUI thread reorder or delay chunks, and is the audio-start signal guaranteed before chunks? (4) Any way the reader thread gets starved (GIL, blocking sendall on the same socket in the writer thread) so that chunks accumulate server-side and arrive in one burst at the end? (5) Recommend the minimal fix to guarantee per-chunk streaming playback.\n\nReturn a concise findings report with file:line references.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/review_playback2.txt\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 40486,
+    "output": 28770,
+    "cacheRead": 1240192,
+    "cacheWrite": 0,
+    "cost": 0.008598088800000002,
+    "turns": 30
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 40486,
+        "output": 28770,
+        "cacheRead": 1240192,
+        "cacheWrite": 0,
+        "cost": 0.008598088800000002,
+        "turns": 30
+      }
+    }
+  ],
+  "durationMs": 284743,
+  "toolCount": 46,
+  "launchContractDigest": "08c1fcff4f7ec3d05dc943fa28907155b82a664b9a33da9b61c56bd992c8e5bc",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings with file:line references and severities returned in /tmp/review_playback2.txt and summarized below: (1) Reader delivers callbacks immediately per event — clients.py:634-677, _on_audio_chunk at 666-668, no deferral to audio-stop (670); verified with a real loopback TCP server (paced chunks arrived paced, blast chunks arrived as a burst mirroring the server). (2) No per-event buffering — wyoming_protocol.py:65-92 decode_event reads one header line (69) plus exact data_length/payload_length via read_exactly (95-111, loop at 101); each event independently framed; makefile internal buffering (clients.py:146) does not merge events. (3) Queued-signal order guaranteed FIFO (controller.py:613-614 lambdas emit from tts-reader thread; connects at 148-149; audio-start emitted clients.py:656-663 before chunks 666-668) — verified with PySide6; delay possible when the GUI loop is busy: all queued chunk slots then fire in a 0.0-gap burst when the loop unblocks (verified), which is the mechanism matching the reported symptom. (4) No reader starvation: single TTS reader thread, no writer thread (unlike STT clients.py:396), one uncontended sendall before the read loop (clients.py:643-647), GIL released during blocking reads; actual risk is the reader running AHEAD of the GUI with no backpressure. (5) Minimal fix recommended: buffer pre-start chunks instead of dropping (controller.py:695-705 + audio.py:475-478 silent-drop hazard, medium) and add a per-chunk acknowledgement for bounded backpressure; note server-side full-synthesis buffering cannot be fixed client-side. Severities: no defect in protocol framing/TTS read loop; medium for the silent chunk-drop and for the unbounded queued-signal burst."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "python /tmp/wyoming_chunk_timing_check.py (real TCP loopback server + TextToSpeechSession/WyomingTcpConnection)",
+          "result": "passed",
+          "summary": "Paced server (0.2s/chunk): callbacks arrived at 0.200/0.401/0.601/0.801/1.001s. Blast server: all callbacks in one burst with 0.0s gaps. Proves per-event delivery and exact mirroring of server pacing; no client accumulation."
+        },
+        {
+          "command": "python /tmp/qt_signal_order_check.py (PySide6 6.11 queued signals from plain Python thread)",
+          "result": "passed",
+          "summary": "Received order: start:7, chunk x5, complete:7. FIFO order preserved; audio-start delivered before chunks."
+        },
+        {
+          "command": "python /tmp/qt_burst_check.py (GUI thread blocked while emitter queues signals)",
+          "result": "passed",
+          "summary": "With the GUI thread blocked 1s, all 5 queued chunk slots ran in a burst (0.0s gaps) only after the loop unblocked — confirms the burst mechanism behind the reported symptom."
+        }
+      ],
+      "validationOutput": [
+        "Protocol framing (wyoming_protocol.py:65-111) and TTS read loop (clients.py:634-677) verified clean by empirical loopback test; PySide6 queued-signal FIFO ordering and burst-when-busy verified empirically; grep/line-number cross-checks performed for all cited references."
+      ],
+      "residualRisks": [
+        "If the Wyoming TTS server buffers the entire synthesis and emits all audio-chunk events only at the end, no client change can produce streaming playback; the client already mirrors server pacing exactly.",
+        "The pre-start silent chunk-drop path (controller.py:695-705 + audio.py:475-478) is normally masked by FIFO signal ordering but becomes data loss if ordering is ever violated (e.g., future multi-thread emission).",
+        "Playback writes remain on the GUI thread (QAudioSink created in _handle_tts_audio_start); the recommended backpressure fix paces the reader but does not move sink writes off the GUI event loop.",
+        "Empirical PySide6 checks ran headless with QCoreApplication (QtMultimedia/QAudioSink unavailable in this sandbox); actual sink write/blocking behavior on Linux/Windows was not exercised."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Read-only review: no repository files changed. Only /tmp verification harnesses (wyoming_chunk_timing_check.py, qt_signal_order_check.py, qt_burst_check.py) and the findings report /tmp/review_playback2.txt were written.",
+      "reviewFindings": [
+        "info: clients.py:634-677 — TTS read loop decodes and dispatches each event immediately; no accumulation until audio-stop (verified empirically).",
+        "info: wyoming_protocol.py:65-111 — decode_event/read_exactly frame each event independently; no per-event payload buffering.",
+        "medium: controller.py:613-614 + clients.py:666-668 — no backpressure between tts-reader thread and GUI; queued chunk signals pile up and are delivered in an end-of-stream burst when the GUI loop is busy, matching the reported symptom (verified empirically).",
+        "medium: controller.py:695-705 + audio.py:475-478 — chunk handed to write_audio before start_stream is silently dropped (returns 0); latent data-loss hazard normally masked by FIFO ordering.",
+        "info: controller.py:613-614 + clients.py:656-663 — audio-start is emitted before chunks and PySide6 queued delivery preserves FIFO order, so audio-start is guaranteed delivered first.",
+        "info: clients.py:634-677 — single TTS reader thread, no writer thread, uncontended sendall; no GIL/socket starvation path; reader runs ahead of the GUI rather than being starved.",
+        "recommendation: buffer pre-start chunks and flush after start_stream; add a per-chunk acknowledgement (threading.Event) so the reader paces socket reads to GUI consumption, guaranteeing incremental playback and pushing accumulation back to the server via TCP backpressure."
+      ],
+      "manualNotes": "Full findings report with file:line references is at /tmp/review_playback2.txt. Review-only task: no repo files were modified; verification harnesses live in /tmp. The reported symptom is not caused by the reader or protocol (verified clean); it is caused by unbounded queued-signal burst delivery when the GUI thread is busy and/or server-side full-synthesis buffering, plus a latent pre-start chunk-drop hazard."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/0e1950b4_coder_1_transcript.jsonl",
+  "timestamp": 1786610894876
+}

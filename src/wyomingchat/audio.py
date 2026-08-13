@@ -411,6 +411,15 @@ class MultiOutputPlayer(QObject):
         self._flush_timer.setInterval(20)
         self._flush_timer.timeout.connect(self._flush_pending_buffers)
 
+    @property
+    # Usage: report whether the player currently has open playback sinks.
+    # Parameters: none.
+    # Return: True when at least one output sink is active.
+    def is_streaming(self) -> bool:
+        """Return whether the player currently has active output sinks."""
+
+        return bool(self._active_outputs)
+
     # Usage: start a new playback stream targeting the requested output devices.
     # Parameters: output_device_ids - persisted output ids selected by the user; format_spec - the PCM format of incoming audio.
     # Return: the number of playback sinks that were started successfully.

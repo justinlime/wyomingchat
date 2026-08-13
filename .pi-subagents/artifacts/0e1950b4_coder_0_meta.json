@@ -1,0 +1,90 @@
+{
+  "runId": "0e1950b4",
+  "agent": "coder",
+  "task": "READ-ONLY code review - do NOT modify any files. Repo: /home/justinlime/code/wyomingchat (Python/PySide6 voice bridge; streams mic to a Wyoming STT server and plays Wyoming TTS audio back).\n\nBUG REPORT: TTS audio now only starts playing AFTER the final chunk arrives from the Wyoming server. Expected: playback begins as soon as the first audio chunk streams in (incremental/streaming playback). This regressed after a refactor.\n\nRead carefully:\n- src/wyomingchat/controller.py: _start_tts, _handle_tts_audio_start, _handle_tts_audio_chunk, _handle_tts_complete, _handle_playback_finished, _handle_error, and how Qt signals (_tts_audio_start_received, _tts_audio_chunk_received, _tts_complete_received) are emitted from client threads and connected.\n- src/wyomingchat/audio.py MultiOutputPlayer: start_stream, write_audio, _write_to_output, finish_stream, _flush_pending_buffers, _schedule_drain_stop, _drain_delay_for, _sink_buffered_ms, _flush_timer, _drain_timer, _estimated_buffer_ms accounting.\n- src/wyomingchat/audio_types.py: AudioFormatSpec fields and defaults.\n\nAnswer concretely with file:line references: (1) Is there anything that could cause all chunks to be buffered (pending_bytes) instead of written to the QAudioSink until the end - e.g., the flush timer never starting, write() returning 0, a format mismatch, or _estimated_buffer_ms miscalculation? (2) Does _handle_tts_audio_start reliably run before the first chunk, and what happens if the first audio-chunk arrives before audio-start (signal ordering across threads)? (3) Could the drain timer fire mid-stream and stop the sink (then a later flush plays a burst)? (4) Trace the exact sequence of events from TTS server 'audio-start' to the first audible sample, and identify any step that would delay it until audio-stop. (5) Is there a regression vs the natural expectation of per-chunk playback (check git blame is unavailable - just reason from the code).\n\nReturn a concise findings report with prioritized fixes.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/review_playback1.txt\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 143,
+  "usage": {
+    "input": 81639,
+    "output": 65796,
+    "cacheRead": 5366272,
+    "cacheWrite": 0,
+    "cost": 0.022438950800000003,
+    "turns": 57
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": false,
+      "exitCode": 143,
+      "usage": {
+        "input": 81639,
+        "output": 65796,
+        "cacheRead": 5366272,
+        "cacheWrite": 0,
+        "cost": 0.022438950800000003,
+        "turns": 57
+      }
+    }
+  ],
+  "durationMs": 1362508,
+  "toolCount": 76,
+  "launchContractDigest": "577259f6f9c19c980474f4111e2dc8bdc85e3a4d3890cf28bb0fe2e766b4b51b",
+  "acceptance": {
+    "status": "rejected",
+    "evidenceStatus": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "attestation",
+        "status": "failed",
+        "message": "Structured acceptance report not found."
+      }
+    ],
+    "verifyRuns": [],
+    "childReportParseError": "Structured acceptance report not found."
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/0e1950b4_coder_0_transcript.jsonl",
+  "timestamp": 1786611972624
+}

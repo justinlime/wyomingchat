@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -102,6 +103,11 @@ class BridgeController(QObject):
         self._tts_voice_query_generation = 0
         self._stt_generation = 0
         self._tts_generation = 0
+        self._tts_format_spec: AudioFormatSpec | None = None
+        self._tts_chunk_ack: threading.Event | None = None
+        self._pre_stream_chunks: list[bytes] = []
+        self._tts_started_at = 0.0
+        self._tts_first_chunk_written = False
         self._latest_final_transcript = ""
         self._pending_tts_text: str | None = None
         self._paused = False
@@ -417,6 +423,11 @@ class BridgeController(QObject):
         self._tts_generation += 1
         self._pending_tts_text = None
         self._tts_format_spec = None
+        if self._tts_chunk_ack is not None:
+            # Wake any reader thread blocked on the per-chunk backpressure ack.
+            self._tts_chunk_ack.set()
+        self._tts_chunk_ack = None
+        self._pre_stream_chunks = []
 
         if stop_capture:
             # Stop the microphone first so the Qt device buffer cannot overflow
@@ -606,12 +617,16 @@ class BridgeController(QObject):
         tts_generation = self._tts_generation
         self._set_state(STATE_SYNTHESIZING)
         self.status_changed.emit("Requesting speech synthesis...")
+        self._tts_chunk_ack = threading.Event()
+        self._pre_stream_chunks = []
+        self._tts_started_at = time.monotonic()
+        self._tts_first_chunk_written = False
         self._tts_session = TextToSpeechSession(
             endpoint=self._config.tts_endpoint,
             text=text,
             voice=self._config.tts_voice,
             on_audio_start=lambda format_spec, generation=tts_generation: self._tts_audio_start_received.emit(generation, format_spec),
-            on_audio_chunk=lambda audio_chunk, generation=tts_generation: self._tts_audio_chunk_received.emit(generation, audio_chunk),
+            on_audio_chunk=lambda audio_chunk, generation=tts_generation: self._emit_tts_chunk_with_backpressure(audio_chunk, generation),
             on_error=lambda message, generation=tts_generation: self._tts_error_received.emit(generation, message),
             on_complete=lambda generation=tts_generation: self._tts_complete_received.emit(generation),
         )
@@ -620,6 +635,32 @@ class BridgeController(QObject):
         except Exception as exc:  # noqa: BLE001 - surface any startup failure to the user.
             self._tts_session = None
             self._handle_error(f"Failed to start synthesis: {exc}")
+
+    # Usage: emit one TTS audio chunk from the reader thread and wait for the GUI thread to consume it before the next chunk is read.
+    # Parameters: audio_chunk - the raw PCM bytes received from the Wyoming TTS server; generation - the TTS session generation.
+    # Return: None.
+    def _emit_tts_chunk_with_backpressure(self, audio_chunk: bytes, generation: int) -> None:
+        """Queue one TTS chunk to the GUI thread with per-chunk backpressure.
+
+        Without this, a fast-synthesizing server can flood the Qt event loop with
+        queued chunk signals; if the GUI thread is ever busy, they pile up and are
+        delivered in one burst at the end of the download, which makes playback
+        appear to start only after the final chunk arrives.
+        """
+
+        self._tts_audio_chunk_received.emit(generation, audio_chunk)
+        ack = self._tts_chunk_ack
+        if ack is None:
+            return
+        ack.clear()
+        deadline = time.monotonic() + 10.0
+        while not ack.is_set():
+            if self._tts_session is None or self._tts_session._completed.is_set():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            ack.wait(timeout=min(0.05, remaining))
 
     # Usage: resolve the Qt playback output id used as the virtual microphone target for the current platform.
     # Parameters: none.
@@ -686,6 +727,13 @@ class BridgeController(QObject):
             self._handle_error("No compatible playback device could be opened for TTS output")
             return
 
+        # Flush any chunks that arrived before the stream opened so the very
+        # first audio is never dropped or delayed.
+        if self._pre_stream_chunks:
+            for pending_chunk in self._pre_stream_chunks:
+                self._player.write_audio(pending_chunk)
+            self._pre_stream_chunks.clear()
+
         self._set_state(STATE_SPEAKING)
         self.status_changed.emit("Playing synthesized audio...")
 
@@ -696,11 +744,28 @@ class BridgeController(QObject):
         """Write streamed TTS audio chunks from the active session to the playback sinks."""
 
         if generation != self._tts_generation:
+            if self._tts_chunk_ack is not None:
+                self._tts_chunk_ack.set()
             return
 
         if self._tts_format_spec is not None and self._config.tts_gain > 1.0:
             chunk = amplify_pcm_chunk(chunk, self._tts_format_spec, self._config.tts_gain)
-        self._player.write_audio(chunk)
+
+        if not self._player.is_streaming:
+            # The stream is not open yet (audio-start not processed); keep the
+            # chunk so it is played once playback begins instead of dropping it.
+            self._pre_stream_chunks.append(chunk)
+        else:
+            if not self._tts_first_chunk_written and self._tts_started_at:
+                self._tts_first_chunk_written = True
+                LOGGER.info(
+                    "First TTS audio chunk written %.0f ms after synthesis start",
+                    (time.monotonic() - self._tts_started_at) * 1000.0,
+                )
+            self._player.write_audio(chunk)
+
+        if self._tts_chunk_ack is not None:
+            self._tts_chunk_ack.set()
 
     # Usage: finalize TTS cleanup after the active synthesis worker completes and let playback drain naturally.
     # Parameters: generation - the TTS session generation that completed.
@@ -711,8 +776,12 @@ class BridgeController(QObject):
         if generation != self._tts_generation:
             return
 
+        if self._tts_chunk_ack is not None:
+            self._tts_chunk_ack.set()
         self._tts_session = None
         self._tts_format_spec = None
+        self._tts_chunk_ack = None
+        self._pre_stream_chunks = []
         self._player.finish_stream()
         if self._state == STATE_SYNTHESIZING:
             self._set_state(STATE_IDLE)
