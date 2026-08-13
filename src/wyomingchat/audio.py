@@ -579,7 +579,30 @@ class MultiOutputPlayer(QObject):
         # Keep the margin small so sentence-to-sentence chaining feels gapless while
         # still leaving room for scheduler jitter so the tail is never cut off.
         drain_delay = max(80, int(self._estimated_buffer_ms) + 100)
+        # The QAudioSink holds an internal buffer beyond the bytes we have written.
+        # Ignoring it under-counts the remaining audio and cuts off the tail of every
+        # stream, which worsens as device-side latency accumulates over a long session.
+        drain_delay = max(drain_delay, int(self._estimated_buffer_ms + self._sink_buffered_ms()) + 80)
         self._drain_timer.start(drain_delay)
+
+    # Usage: measure the largest amount of PCM currently sitting inside the Qt audio sinks.
+    # Parameters: none.
+    # Return: the estimated playback duration in milliseconds of the most buffered sink.
+    def _sink_buffered_ms(self) -> float:
+        """Return the longest internal sink buffer duration among active outputs."""
+
+        if self._format_spec is None:
+            return 0.0
+
+        max_buffered_bytes = 0
+        for active_output in self._active_outputs:
+            try:
+                buffered_bytes = max(0, active_output.sink.bufferSize() - active_output.sink.bytesFree())
+            except (RuntimeError, ValueError):
+                continue
+            max_buffered_bytes = max(max_buffered_bytes, buffered_bytes)
+
+        return self._format_spec.bytes_to_duration_ms(max_buffered_bytes)
 
     # Usage: react to Qt playback state changes, primarily to surface sink errors while streaming.
     # Parameters: output_id - the persisted output id whose sink changed; state - the new QAudio state.

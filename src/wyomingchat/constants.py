@@ -15,7 +15,13 @@ DEFAULT_TTS_PORT = 10200
 DEFAULT_AUDIO_RATE = 16_000
 DEFAULT_AUDIO_WIDTH = 2
 DEFAULT_AUDIO_CHANNELS = 1
-DEFAULT_AUDIO_BUFFER_MS = 40
+# Size of the Qt capture device buffer in milliseconds. The default is deliberately
+# generous: on Windows WASAPI shared mode, a too-small buffer overflows and drops
+# microphone audio whenever the GUI thread stalls briefly (TTS dispatch, config
+# saves). Dropped audio shows up as truncated transcriptions that worsen as the
+# session accumulates more work. The VAD is frame-count based, so a larger buffer
+# is harmless - delayed chunks still arrive in order.
+DEFAULT_AUDIO_BUFFER_MS = 250
 DEFAULT_MIC_GATE_THRESHOLD_PERCENT = 4
 DEFAULT_MIC_GAIN = 1.0
 MAX_MIC_GAIN = 10.0
