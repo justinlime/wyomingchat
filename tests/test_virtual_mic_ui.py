@@ -112,3 +112,40 @@ def test_cable_enabled_without_cable_emits_hint(tmp_path, qapp, monkeypatch) -> 
     assert any("VB-CABLE" in message for message in status_messages)
 
     window.close()
+
+
+# Usage: verify that tooltip wrapping produces compact wrapped rich text.
+# Parameters: none.
+# Return: None.
+def test_wrap_tooltip_text_wraps_and_escapes() -> None:
+    """Ensure the tooltip helper wraps long text and escapes markup."""
+
+    from wyomingchat.ui import wrap_tooltip_text
+
+    result = wrap_tooltip_text("word " * 60)
+    assert result.startswith("<p style='white-space: pre-wrap'>")
+    assert "\n" in result
+
+    escaped = wrap_tooltip_text("<script>alert('x')</script>")
+    assert "&lt;" in escaped
+    assert "<script>" not in escaped
+
+
+# Usage: verify the Pause Bridge button toggles the controller's listening state.
+# Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
+# Return: None.
+def test_pause_bridge_button_toggles_listening(tmp_path, qapp) -> None:
+    """Ensure the action button pauses and resumes the bridge."""
+
+    controller, window = build_window(tmp_path)
+
+    assert window._pause_bridge_button.text() == "Pause Bridge"
+    window._pause_bridge_button.click()
+    assert window._pause_bridge_button.text() == "Resume Bridge"
+    assert controller._paused is True
+
+    window._pause_bridge_button.click()
+    assert window._pause_bridge_button.text() == "Pause Bridge"
+    assert controller._paused is False
+
+    window.close()

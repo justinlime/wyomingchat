@@ -1,0 +1,146 @@
+{
+  "runId": "83c741bb",
+  "agent": "researcher",
+  "task": "READ-ONLY review - do NOT modify any files. Repo: /home/justinlime/code/wyomingchat (Python/PySide6 voice bridge).\n\nVERIFY the audio/VAD timing pipeline for cumulative drift or misalignment bugs that could make transcription truncation worse over a long session:\n- src/wyomingchat/vad.py — OpenMicVoiceDetector.process_audio_chunk: frame buffering (_pending_bytes), _source_frame_bytes, _pre_roll_frames, _pending_silence_frames, _silent_frame_count, _stop_silence_frames, pause buffer logic, and set_stop_silence_frames. Verify frame accounting is bounded and self-correcting (no drift accumulation).\n- src/wyomingchat/audio.py — AudioCaptureStream._drain_audio (reads all available), QAudioSource buffer 250ms, and MultiOutputPlayer timing.\n- src/wyomingchat/controller.py — _handle_audio_chunk, mic_gain application, cooldown, state gating.\n\nAnswer: (1) Is the frame pipeline bounded and correct, or does anything accumulate (pending bytes, silent counts, stale flags) across utterances? (2) Does a 250ms capture buffer plus the frame-count-based VAD introduce any systematic drift? (3) Any interaction where a config save or state change while paused/monitoring could double-consume or drop audio? (4) Note anything that could explain truncation worsening over time.\n\nReturn a findings report with file:line references.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/review_drift.txt\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 1,
+  "usage": {
+    "input": 50640,
+    "output": 41686,
+    "cacheRead": 1193856,
+    "cacheWrite": 0,
+    "cost": 0.0110522384,
+    "turns": 22
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 50640,
+        "output": 41686,
+        "cacheRead": 1193856,
+        "cacheWrite": 0,
+        "cost": 0.0110522384,
+        "turns": 22
+      }
+    }
+  ],
+  "durationMs": 391676,
+  "toolCount": 27,
+  "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "launchContractDigest": "134daca14970c8781316064b0ce2aabd5c0dc47b8667f6020fc824f119705d66",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Report written to /tmp/review_drift.txt (18.4 KB) with concrete findings carrying file:line references and severity. Key findings: [HIGH] controller.py:440-446/457 - blocking wait_closed() teardown runs before stop_capture() on every monitor restart, so GUI stalls >250 ms overflow the Qt capture buffer (audio.py:336) and drop mic audio; [MEDIUM] controller.py:493-496 - VAD reset on every chunk in TRANSCRIBING/SYNTHESIZING/SPEAKING discards barge-in speech and destroys the pre-roll; [LOW] vad.py:546-547/458/461 - mid-utterance pauses >480 ms evict older silence frames (silence-only); [LOW] vad.py:598 - reset() discards <1 frame remainder at boundaries. Verified bounded: _pending_bytes peak 1023 bytes (<1024-byte frame) under random 1..9000-byte chunking and 250 ms bursts; stop accounting resets all counters. Verified no double-consume: readAll semantics (audio.py:371-381), idempotent stop_capture (audio.py:350-367), exclusive VAD buffer paths (vad.py:540-555), generation guards (controller.py:601-602). Verified no systematic drift from the 250 ms buffer (byte-exact frame accumulator, per-frame exact resampling to 512 detector samples)."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git log --oneline -20",
+          "result": "passed",
+          "summary": "9 commits, all 'init'-style messages; no history clues about regression timing"
+        },
+        {
+          "command": "python3 /tmp/vad_probe.py (2400x 8000-byte bursts against real vad.py)",
+          "result": "passed",
+          "summary": "peak _pending_bytes=960 (<1024 frame); pre_roll maxlen 19, silence buf maxlen 15, voiced window 6"
+        },
+        {
+          "command": "python3 /tmp/vad_probe2.py (value-aware detector: pause/stop accounting + random-size chunks)",
+          "result": "passed",
+          "summary": "1s pause: 15/31 silence frames retained (512ms silence evicted, speech intact); stop resets all state; peak _pending_bytes=1023 with random 1..9000-byte chunks"
+        },
+        {
+          "command": "grep/read of controller.py, audio.py, vad.py, constants.py, audio_types.py, clients.py, streaming.py, tests/test_vad.py",
+          "result": "passed",
+          "summary": "Static review of all scoped files; line references verified and corrected"
+        }
+      ],
+      "validationOutput": [
+        "Frame accounting empirically bounded: _pending_bytes never exceeds one frame (1023 bytes max) regardless of chunk size or burst pattern",
+        "Stop/start/resume paths empirically verified: buffers and counters fully reset at every utterance boundary",
+        "Pause-buffer eviction quantified: 1 s pause retains only last 480 ms (15 frames) of silence; speech frames always forwarded",
+        "No file in the repository was modified (review-only); probe scripts lived in /tmp"
+      ],
+      "residualRisks": [
+        "GUI-thread stall behavior (Qt 250 ms buffer overflow) could not be empirically measured without instrumenting a live QAudioSource + real mic; the drop mechanism is inferred from code order and the authors' constants.py:28-33 comment",
+        "Silero inference per-frame cost on the GUI thread was not benchmarked; if it exceeds ~30 ms/frame the 250 ms burst processing (7-8 frames) alone could stall the loop",
+        "The barge-in loss window (controller.py:493-496) is by-design gating, but its growth with STT/TTS latency is a UX/truncation risk that needs a product decision (e.g., barge-in detection or mic ducking), not just a code fix",
+        "Stuck-session escalation (STT server never responds after finish() -> state stuck TRANSCRIBING -> VAD permanently reset) has no timeout; verified as a plausible total-loss state but not reproduced live",
+        "TTS drain/stop_stream race (audio.py:475-536) reviewed and judged guarded by unit.complete ordering, but only unit tests cover it, not a live long-session soak"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff - read-only review. Findings report written to /tmp/review_drift.txt.",
+      "reviewFindings": [
+        "high: controller.py:440-446 then 457 - blocking close()+wait_closed() for STT and every TTS session runs BEFORE stop_capture() on each monitor restart (save/load/pause/resume), so capture keeps filling the 250 ms Qt buffer during GUI stalls >250 ms -> mic audio dropped at every restart boundary",
+        "high: audio.py:336 + constants.py:28-33 - the 250 ms QAudioSource buffer is the documented overflow point; truncation worsens as per-utterance GUI work (blocking teardown, JSON save at controller.py:609, per-frame resample+Silero, streaming-TTS fan-out at controller.py:530-531/592-593) accumulates",
+        "medium: controller.py:493-496 - VAD reset on every chunk during TRANSCRIBING/SYNTHESIZING/SPEAKING discards barge-in speech and the pre-roll; a hung STT server leaves state stuck in TRANSCRIBING with the VAD permanently reset (no timeout in the path)",
+        "medium: controller.py:190-194/298-311/385-391 - save while LISTENING closes the in-flight STT session (utterance lost); every restart starts a fresh VAD with empty pre-roll so speech begun in the restart window loses ~128 ms trigger + up to 600 ms lead-in",
+        "low: vad.py:546-547 with maxlen vad.py:458/461 - mid-utterance pauses >480 ms permanently evict older silence frames (silence-only, bounded, verified)",
+        "low: vad.py:587-592 - set_stop_silence_frames does not resize _speech_resume_buffer_frames (fixed at construction), so raising the hangover does not grow pause retention",
+        "info: vad.py:598 - reset() clears _pending_bytes (<1 frame, <=32 ms) at utterance boundaries; bounded, negligible",
+        "info: controller.py:545 - _synthesis_sessions replaced without close(); benign in normal flow (sessions complete before IDLE) but leaves daemon threads/sockets alive if a server hangs",
+        "cleared: no double-consume of audio anywhere (readAll removal semantics, idempotent stop_capture, exclusive VAD buffer paths, generation guards)",
+        "cleared: no cumulative drift from 250 ms buffer + frame-count VAD (byte-exact accumulator, per-frame exact resample to 512 detector samples)"
+      ],
+      "manualNotes": "Read-only review; no repository files touched. Report persisted at /tmp/review_drift.txt. The strongest actionable fix candidates, in order: (1) stop capture BEFORE the blocking wait_closed() teardown in _abort_current_activity, or move stop_capture to the top of _restart_microphone_monitor; (2) add a timeout/fallback for the stuck-TRANSCRIBING state so the VAD resumes; (3) consider draining the old QAudioSource buffer (readAll) before stop to salvage up to 250 ms at restarts. Empirical probes (scripts in /tmp/vad_probe*.py) confirmed VAD boundedness and silence-eviction behavior against the real module."
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/83c741bb_researcher_2_transcript.jsonl",
+  "timestamp": 1786608888792
+}

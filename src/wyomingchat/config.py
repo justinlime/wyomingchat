@@ -11,12 +11,14 @@ from .constants import (
     DEFAULT_STOP_SILENCE_MS,
     DEFAULT_STT_HOST,
     DEFAULT_STT_PORT,
+    DEFAULT_TTS_GAIN,
     DEFAULT_TTS_HOST,
     DEFAULT_TTS_PORT,
     DEFAULT_VIRTUAL_MIC_DESCRIPTION,
     DEFAULT_VIRTUAL_MIC_NODE_NAME,
     MAX_MIC_GAIN,
     MAX_STOP_SILENCE_MS,
+    MAX_TTS_GAIN,
     MIN_STOP_SILENCE_MS,
 )
 
@@ -322,8 +324,8 @@ class AppConfig:
     tts_voice: TtsVoiceConfig = field(default_factory=TtsVoiceConfig)
     mic_gate_threshold_percent: int = DEFAULT_MIC_GATE_THRESHOLD_PERCENT
     mic_gain: float = DEFAULT_MIC_GAIN
+    tts_gain: float = DEFAULT_TTS_GAIN
     stop_silence_ms: int = DEFAULT_STOP_SILENCE_MS
-    streaming_synthesis: bool = True
     audio: AudioSelection = field(default_factory=AudioSelection)
     virtual_microphone: VirtualMicrophoneConfig = field(default_factory=VirtualMicrophoneConfig)
     last_transcript: str = ""
@@ -340,8 +342,8 @@ class AppConfig:
             "tts_voice": self.tts_voice.to_dict(),
             "mic_gate_threshold_percent": self.mic_gate_threshold_percent,
             "mic_gain": self.mic_gain,
+            "tts_gain": self.tts_gain,
             "stop_silence_ms": self.stop_silence_ms,
-            "streaming_synthesis": self.streaming_synthesis,
             "audio": self.audio.to_dict(),
             "virtual_microphone": self.virtual_microphone.to_dict(),
             "last_transcript": self.last_transcript,
@@ -376,11 +378,14 @@ class AppConfig:
                 1.0,
                 min(MAX_MIC_GAIN, coerce_float(payload.get("mic_gain"), DEFAULT_MIC_GAIN)),
             ),
+            tts_gain=max(
+                1.0,
+                min(MAX_TTS_GAIN, coerce_float(payload.get("tts_gain"), DEFAULT_TTS_GAIN)),
+            ),
             stop_silence_ms=max(
                 MIN_STOP_SILENCE_MS,
                 min(MAX_STOP_SILENCE_MS, coerce_int(payload.get("stop_silence_ms"), DEFAULT_STOP_SILENCE_MS)),
             ),
-            streaming_synthesis=coerce_bool(payload.get("streaming_synthesis"), True),
             audio=AudioSelection.from_dict(payload.get("audio")),
             virtual_microphone=VirtualMicrophoneConfig.from_dict(legacy_virtual_mic),
             last_transcript=coerce_str(payload.get("last_transcript"), ""),

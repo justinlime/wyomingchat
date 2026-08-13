@@ -1,0 +1,138 @@
+{
+  "runId": "83c741bb",
+  "agent": "coder",
+  "task": "READ-ONLY code review - do NOT modify any files. Repo: /home/justinlime/code/wyomingchat (a Python/PySide6 app that bridges a mic to Wyoming STT/TTS servers).\n\nINVESTIGATE: A user reports a LONG PAUSE (up to seconds) between sentences in TTS playback that started when 'streaming synthesis' was added. The app synthesizes each transcript sentence as a separate Wyoming TTS request and chains playback per sentence.\n\nRead these files carefully:\n- src/wyomingchat/controller.py — focus on: _SentenceAudioUnit, _start_sentence_synthesis, _handle_sentence_audio_start/chunk/complete, _maybe_start_playback, _handle_playback_finished, _handle_stt_complete, and how sentence units chain playback.\n- src/wyomingchat/audio.py — focus on MultiOutputPlayer: write_audio, finish_stream, _flush_pending_buffers, _schedule_drain_stop, _drain_delay_for, _sink_buffered_ms, _drain_timer, _flush_timer, _estimated_buffer_ms accounting.\n- src/wyomingchat/streaming.py (transcript chunker).\n\nAnswer concretely: (1) Where exactly does an inter-sentence gap come from in the chaining logic? Quantify the delay contributors (drain timer margin, stream restart, wait-for-next-unit-format, anything else). (2) Is there a double-count or timing bug in _estimated_buffer_ms vs _sink_buffered_ms? (3) Could concurrent per-sentence TTS sessions (opened while the mic is still being listened to) cause the STT service to time out (report the exact timeout strings in clients.py: 'STT send failed: timed out', '_connected.wait(timeout=10.0)', 'STT receive failed')? (4) Recommend the minimal, safest way to restore single-continuous-playback behavior (one synthesize per utterance, one stream, no chaining).\n\nReturn a concise findings report with file:line references and a prioritized list of concrete fixes.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/review_pause.txt\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 42415,
+    "output": 27994,
+    "cacheRead": 412032,
+    "cacheWrite": 0,
+    "cost": 0.007465054800000001,
+    "turns": 11
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 42415,
+        "output": 27994,
+        "cacheRead": 412032,
+        "cacheWrite": 0,
+        "cost": 0.007465054800000001,
+        "turns": 11
+      }
+    }
+  ],
+  "durationMs": 241113,
+  "toolCount": 20,
+  "launchContractDigest": "0244ef3d06f49ab0e20d518bc469043269cac7977d47f1a060d2477913f21156",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings written to /tmp/review_pause.txt with file:line references and P0/P1/P2 severities: (P0) duplicate tail synthesis at streaming.py:64-67 via double finish() at controller.py:530 and 636; (P0) per-sentence stream chaining at controller.py:789-836 + audio.py:417-527 causing ~100ms+ drain margin per boundary (audio.py:28-33); (P1) wait-for-audio-start gap at controller.py:804-807; (P1) 10s STT socket timeouts at clients.py:140-145 with exact strings at clients.py:384-387/399/429-433 aborting all TTS via controller.py:860-881; (P2) stale drain estimate at audio.py:479-485/592-597. Confirmed no sum double-count in _drain_delay_for (max(), pinned by tests/test_audio.py:71-93)."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "read src/wyomingchat/controller.py, audio.py, streaming.py, clients.py, config.py, constants.py, audio_types.py",
+          "result": "passed",
+          "summary": "Traced sentence-unit chaining, drain/estimate logic, chunker, and timeout strings"
+        },
+        {
+          "command": "grep tests/test_audio.py and tests/test_controller_streaming.py",
+          "result": "passed",
+          "summary": "Confirmed drain max() behavior is pinned by tests; streaming_synthesis default True"
+        },
+        {
+          "command": "write /tmp/review_pause.txt",
+          "result": "passed",
+          "summary": "Findings report written to the authoritative output path"
+        }
+      ],
+      "validationOutput": [
+        "Double-commit path verified: finish() called at controller.py:530 (VAD speech-end) and controller.py:636 (STT complete); trailing appended unconditionally at streaming.py:66-67 while bounded sentences are content-key deduped at streaming.py:52-62.",
+        "STT timeout strings verified verbatim in clients.py:384-387, 399, 429-433."
+      ],
+      "residualRisks": [
+        "If streaming_synthesis stays enabled (Option B), gap timing depends on TTS server concurrency behavior and Qt sink startup latency; measured gaps are platform-dependent.",
+        "Duplicate-tail fix alone does not remove the per-boundary drain/restart gap; the chaining fix is required for fully continuous playback.",
+        "STT 10s timeout remains fragile for long un-streamed utterances even after the chaining fix; timeout raise/config is recommended separately.",
+        "No runtime tests were executed (read-only review); findings are static-analysis based."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Read-only code review; no files modified. Output written to /tmp/review_pause.txt.",
+      "reviewFindings": [
+        "blocker: streaming.py:64-67 - finish() double-commits trailing un-bounded sentence; called twice per utterance (controller.py:530, 636) causing duplicate synthesis + duplicate playback of un-punctuated STT tails",
+        "blocker: controller.py:789-836/audio.py:417-527 - per-sentence player chaining (start_stream/stop_stream + per-unit finish_stream) inserts a >=100ms drain margin (audio.py:28-33) and sink-restart latency at every boundary",
+        "high: controller.py:804-807 - playback blocks on next unit's format_spec; concurrent per-sentence TTS sessions against a serializing server produce multi-second gaps",
+        "high: clients.py:140-145 + controller.py:860-881 - 10s STT socket timeouts (\"STT send failed: timed out\", \"STT receive failed: timed out\", \"STT receive failed after audio-stop: timed out\", silent _connected.wait(10.0)) now abort all in-flight TTS via _abort_current_activity",
+        "medium: audio.py:479-485/592-597 - drain estimate frozen at last write; stale overstatement inflates per-boundary margin by <20ms; no sum double-count present (tests/test_audio.py:71-93)"
+      ],
+      "manualNotes": "Recommended minimal fix to restore single-continuous playback: default streaming_synthesis=False (config.py:329) to take the existing single-shot path, or keep the feature but hold one continuous player stream across units and finish_stream() only after the last unit; always include the streaming.py trailing-dedupe fix."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/83c741bb_coder_0_transcript.jsonl",
+  "timestamp": 1786608738185
+}

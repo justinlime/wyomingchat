@@ -25,6 +25,8 @@ DEFAULT_AUDIO_BUFFER_MS = 250
 DEFAULT_MIC_GATE_THRESHOLD_PERCENT = 4
 DEFAULT_MIC_GAIN = 1.0
 MAX_MIC_GAIN = 10.0
+DEFAULT_TTS_GAIN = 1.0
+MAX_TTS_GAIN = 3.0
 
 # How long the user must stay silent before the utterance is considered finished.
 # Natural pauses mid-thought are often 1.5-2.5s, so the default is deliberately

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize
+import textwrap
+
+from PySide6.QtCore import QPoint, Qt, QSize
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTabWidget,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +43,18 @@ from .constants import APP_NAME, MAX_STOP_SILENCE_MS, MIN_STOP_SILENCE_MS
 from .controller import BridgeController
 from .platforms import platform_label, virtual_mic_mode
 from .virtual_cable import cable_mic_name_for_output, detect_cable_outputs, output_device_pairs
+
+
+# Usage: wrap help text into compact lines that Qt tooltips display without truncation.
+# Parameters: text - the raw explanation text.
+# Return: the wrapped, escaped rich-text tooltip payload.
+def wrap_tooltip_text(text: str) -> str:
+    """Return a wrapped, escaped tooltip payload that renders compactly."""
+
+    import html
+
+    wrapped = textwrap.fill(str(text), width=90, break_long_words=False)
+    return f"<p style='white-space: pre-wrap'>{html.escape(wrapped)}</p>"
 
 
 class MainWindow(QMainWindow):
@@ -62,11 +77,33 @@ class MainWindow(QMainWindow):
         self._build_window()
         self._connect_controller_signals()
 
-    # Usage: build a form label with an adjacent information icon that explains the option on hover.
-    # Parameters: text - the visible label text; tooltip - the hover explanation shown for the icon.
+    # Usage: build a small information button that explains an option on hover and on click.
+    # Parameters: tooltip - the explanation text shown for the icon.
+    # Return: a QToolButton that shows the tooltip on hover and reveals it when clicked.
+    def _info_button(self, tooltip: str) -> QToolButton:
+        """Create an info icon that shows its help on hover and on click."""
+
+        wrapped_tooltip = wrap_tooltip_text(tooltip)
+        info_button = QToolButton()
+        info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        info_button.setIconSize(QSize(14, 14))
+        info_button.setAutoRaise(True)
+        info_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        info_button.setToolTip(wrapped_tooltip)
+        info_button.clicked.connect(
+            lambda: QToolTip.showText(
+                info_button.mapToGlobal(QPoint(0, info_button.height() + 4)),
+                wrapped_tooltip,
+                info_button,
+            )
+        )
+        return info_button
+
+    # Usage: build a form label with an adjacent information icon that explains the option on hover or click.
+    # Parameters: text - the visible label text; tooltip - the hover/click explanation shown for the icon.
     # Return: a QWidget row containing the label text and the info icon.
     def _option_label(self, text: str, tooltip: str) -> QWidget:
-        """Create a label with an inline information icon for hover help."""
+        """Create a label with an inline information icon for hover and click help."""
 
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -74,12 +111,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
 
         label = QLabel(text)
-        info_button = QToolButton()
-        info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
-        info_button.setIconSize(QSize(14, 14))
-        info_button.setAutoRaise(True)
-        info_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        info_button.setToolTip(tooltip)
+        info_button = self._info_button(tooltip)
 
         layout.addWidget(label)
         layout.addWidget(info_button)
@@ -93,7 +125,7 @@ class MainWindow(QMainWindow):
         """Add a form row with an inline info icon and hover help on the field."""
 
         layout.addRow(self._option_label(label_text, tooltip), field_widget)
-        field_widget.setToolTip(tooltip)
+        field_widget.setToolTip(wrap_tooltip_text(wrap_tooltip_text(tooltip)))
 
     # Usage: create the complete widget tree used by the main window.
     # Parameters: none.
@@ -178,17 +210,9 @@ class MainWindow(QMainWindow):
         self._tts_voice_combo = QComboBox()
         self._refresh_tts_voices_button = QPushButton("Query Voices")
         self._refresh_tts_voices_button.clicked.connect(self._handle_refresh_tts_voices_clicked)
-        self._refresh_tts_voices_button.setToolTip(
+        self._refresh_tts_voices_button.setToolTip(wrap_tooltip_text(
             "Send a Wyoming describe/info request to the configured TTS server and pick a specific voice when the server advertises one."
-        )
-        self._streaming_synthesis_checkbox = QCheckBox(
-            "Streaming synthesis (synthesize each completed sentence as you speak)"
-        )
-        self._streaming_synthesis_checkbox.setToolTip(
-            "When enabled, each completed sentence is synthesized while you are still speaking the rest of the utterance, "
-            "then played back in order once you stop. This hides TTS latency behind your remaining speech for long replies. "
-            "Disable it if your TTS server misbehaves with concurrent requests."
-        )
+        ))
 
         tts_voice_row = QWidget()
         tts_voice_layout = QHBoxLayout(tts_voice_row)
@@ -229,13 +253,6 @@ class MainWindow(QMainWindow):
             "The voice the TTS service uses for synthesized speech. "
             "Use Query Voices to ask the server which voices it supports, or keep 'Use server default voice' selected.",
         )
-        layout.addRow(
-            self._option_label(
-                "Streaming synthesis",
-                self._streaming_synthesis_checkbox.toolTip(),
-            ),
-            self._streaming_synthesis_checkbox,
-        )
         return page
 
     # Usage: build the tab containing microphone and playback selectors.
@@ -272,11 +289,43 @@ class MainWindow(QMainWindow):
         self._output_list = QListWidget()
         self._output_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self._output_list.setMaximumHeight(200)
-        self._output_list.setToolTip(
+        self._output_list.setToolTip(wrap_tooltip_text(
             "Check the devices you want TTS audio to play through. "
             "The virtual microphone target is added automatically when enabled."
-        )
+        ))
         layout.addWidget(self._output_list)
+
+        self._tts_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self._tts_gain_slider.setRange(10, 30)
+        self._tts_gain_slider.setSingleStep(1)
+        self._tts_gain_slider.valueChanged.connect(self._handle_tts_gain_slider_changed)
+        self._tts_gain_slider.setToolTip(wrap_tooltip_text(
+            "Boosts the volume of synthesized speech before playback (1x = no boost). "
+            "Raise this if the TTS voice is quieter than you would like, including on the virtual microphone. "
+            "Boosted audio is clamped to prevent distortion."
+        ))
+        self._tts_gain_value_label = QLabel("1.0x")
+
+        tts_gain_row = QWidget()
+        tts_gain_layout = QHBoxLayout(tts_gain_row)
+        tts_gain_layout.setContentsMargins(0, 0, 0, 0)
+        tts_gain_layout.addWidget(self._tts_gain_slider, stretch=1)
+        tts_gain_layout.addWidget(self._tts_gain_value_label)
+
+        tts_boost_row = QWidget()
+        tts_boost_layout = QHBoxLayout(tts_boost_row)
+        tts_boost_layout.setContentsMargins(0, 0, 0, 0)
+        tts_boost_layout.setSpacing(12)
+        tts_boost_layout.addWidget(
+            self._option_label(
+                "TTS boost",
+                "Boosts the volume of synthesized speech before playback (1x = no boost). "
+                "Raise this if the TTS voice is quieter than you would like, including on the virtual microphone. "
+                "Boosted audio is clamped to prevent distortion.",
+            )
+        )
+        tts_boost_layout.addWidget(tts_gain_row, stretch=1)
+        layout.addWidget(tts_boost_row)
 
         hint = QLabel(
             "Tip: choose your real speakers or headphones here. The virtual microphone target is added automatically when enabled."
@@ -301,11 +350,11 @@ class MainWindow(QMainWindow):
         self._mic_gate_slider.setRange(0, 100)
         self._mic_gate_slider.setSingleStep(1)
         self._mic_gate_slider.valueChanged.connect(self._handle_mic_gate_slider_changed)
-        self._mic_gate_slider.setToolTip(
+        self._mic_gate_slider.setToolTip(wrap_tooltip_text(
             "The minimum input level that counts as speech for starting a new utterance. "
             "Watch the live meter in the header while the room is quiet, then set this slightly above the background level "
             "so quiet noises and taps do not trigger the app."
-        )
+        ))
         self._mic_gate_value_label = QLabel("0%")
 
         slider_row = QWidget()
@@ -318,11 +367,11 @@ class MainWindow(QMainWindow):
         self._mic_gain_slider.setRange(10, 100)
         self._mic_gain_slider.setSingleStep(5)
         self._mic_gain_slider.valueChanged.connect(self._handle_mic_gain_slider_changed)
-        self._mic_gain_slider.setToolTip(
+        self._mic_gain_slider.setToolTip(wrap_tooltip_text(
             "Boosts a quiet microphone signal before speech detection and transcription (1x = no boost). "
             "If the header meter reads low while you speak normally, raise this. "
             "Boosted audio is clamped to prevent distortion."
-        )
+        ))
         self._mic_gain_value_label = QLabel("1.0x")
 
         boost_row = QWidget()
@@ -335,11 +384,11 @@ class MainWindow(QMainWindow):
         self._stop_silence_slider.setRange(MIN_STOP_SILENCE_MS, MAX_STOP_SILENCE_MS)
         self._stop_silence_slider.setSingleStep(100)
         self._stop_silence_slider.valueChanged.connect(self._handle_stop_silence_slider_changed)
-        self._stop_silence_slider.setToolTip(
+        self._stop_silence_slider.setToolTip(wrap_tooltip_text(
             "How long you must stay silent before the utterance is considered finished. "
             "If natural mid-thought pauses split a long reply into separate responses, raise this. "
             "Shorter values make responses to short commands start sooner."
-        )
+        ))
         self._stop_silence_value_label = QLabel("2.5s")
 
         silence_row = QWidget()
@@ -433,11 +482,11 @@ class MainWindow(QMainWindow):
         self._virtual_mic_description_edit = QLineEdit()
         self._install_virtual_mic_button = QPushButton("Write PipeWire Config")
         self._install_virtual_mic_button.clicked.connect(self._handle_install_virtual_mic_clicked)
-        self._install_virtual_mic_button.setToolTip(
+        self._install_virtual_mic_button.setToolTip(wrap_tooltip_text(
             "Writes a PipeWire loopback config creating a playback sink and a linked microphone-like source. "
             "The virtual mic carries only the app's TTS output. "
             "Restart pipewire, pipewire-pulse, and wireplumber after writing the config."
-        )
+        ))
 
         layout.addRow(
             self._option_label(
@@ -481,11 +530,11 @@ class MainWindow(QMainWindow):
         self._virtual_cable_combo = QComboBox()
         self._refresh_cables_button = QPushButton("Refresh Cables")
         self._refresh_cables_button.clicked.connect(self._handle_refresh_cables_clicked)
-        self._refresh_cables_button.setToolTip("Re-scan audio devices after installing or updating a virtual audio cable driver.")
-        self._virtual_cable_combo.setToolTip(
+        self._refresh_cables_button.setToolTip(wrap_tooltip_text("Re-scan audio devices after installing or updating a virtual audio cable driver."))
+        self._virtual_cable_combo.setToolTip(wrap_tooltip_text(
             "Install a free virtual audio cable once (VB-CABLE at vb-audio.com/Cable or Voicemeeter), "
             "then pick its playback endpoint. Other apps can then select the cable's microphone endpoint."
-        )
+        ))
 
         cable_row = QWidget()
         cable_layout = QHBoxLayout(cable_row)
@@ -532,10 +581,17 @@ class MainWindow(QMainWindow):
         self._save_button.clicked.connect(self._handle_save_clicked)
         self._refresh_devices_button = QPushButton("Refresh Devices")
         self._refresh_devices_button.clicked.connect(self._handle_refresh_clicked)
+        self._pause_bridge_button = QPushButton("Pause Bridge")
+        self._pause_bridge_button.clicked.connect(self._handle_pause_bridge_clicked)
+        self._pause_bridge_button.setToolTip(wrap_tooltip_text(
+            "Temporarily stop the app from listening to your microphone. "
+            "Click again to resume always-on monitoring. Useful when you need privacy or quiet for a moment."
+        ))
 
         layout.addWidget(self._save_button)
         layout.addWidget(self._refresh_devices_button)
         layout.addStretch(1)
+        layout.addWidget(self._pause_bridge_button)
         return row
 
     # Usage: build the transcript and error display pane at the bottom of the window.
@@ -593,8 +649,8 @@ class MainWindow(QMainWindow):
         self._refresh_tts_voice_combo(config.tts_voice)
         self._set_mic_gate_threshold(config.mic_gate_threshold_percent)
         self._set_mic_boost(config.mic_gain)
+        self._set_tts_boost(config.tts_gain)
         self._set_stop_silence(config.stop_silence_ms)
-        self._streaming_synthesis_checkbox.setChecked(config.streaming_synthesis)
         self._virtual_mic_enabled_checkbox.setChecked(config.virtual_microphone.enabled)
         mic_mode = virtual_mic_mode()
         if mic_mode == "pipewire":
@@ -727,6 +783,18 @@ class MainWindow(QMainWindow):
         self._mic_gain_slider.blockSignals(False)
         self._mic_gain_value_label.setText(f"{normalized_gain:.1f}x")
 
+    # Usage: display the supplied TTS output boost multiplier in the slider row.
+    # Parameters: gain - the linear output multiplier (1.0x means no boost).
+    # Return: None.
+    def _set_tts_boost(self, gain: float) -> None:
+        """Display the supplied TTS output boost multiplier in the slider row."""
+
+        normalized_gain = max(1.0, min(3.0, float(gain)))
+        self._tts_gain_slider.blockSignals(True)
+        self._tts_gain_slider.setValue(int(round(normalized_gain * 10)))
+        self._tts_gain_slider.blockSignals(False)
+        self._tts_gain_value_label.setText(f"{normalized_gain:.1f}x")
+
     # Usage: display the supplied utterance-end silence timeout in the slider row.
     # Parameters: silence_ms - the maximum silence in milliseconds before the utterance ends.
     # Return: None.
@@ -829,8 +897,8 @@ class MainWindow(QMainWindow):
             tts_voice=self._collect_selected_tts_voice(),
             mic_gate_threshold_percent=self._mic_gate_slider.value(),
             mic_gain=self._mic_gain_slider.value() / 10.0,
+            tts_gain=self._tts_gain_slider.value() / 10.0,
             stop_silence_ms=self._stop_silence_slider.value(),
-            streaming_synthesis=self._streaming_synthesis_checkbox.isChecked(),
             audio=AudioSelection(
                 input_device_id=self._input_combo.currentData(),
                 output_device_ids=self._collect_output_device_ids(),
@@ -906,6 +974,26 @@ class MainWindow(QMainWindow):
         silence_ms = max(MIN_STOP_SILENCE_MS, min(MAX_STOP_SILENCE_MS, int(value)))
         self._stop_silence_value_label.setText(f"{silence_ms / 1000.0:.1f}s")
         self._controller.set_stop_silence_ms(silence_ms)
+
+    # Usage: apply the TTS output boost slider value to the next synthesized audio chunks.
+    # Parameters: value - the slider value in tenths of a multiplier (10 means 1.0x).
+    # Return: None.
+    def _handle_tts_gain_slider_changed(self, value: int) -> None:
+        """Reflect the latest TTS output boost multiplier in the UI immediately."""
+
+        gain_multiplier = max(10, min(30, int(value))) / 10.0
+        self._tts_gain_value_label.setText(f"{gain_multiplier:.1f}x")
+        self._controller.set_tts_gain(gain_multiplier)
+
+    # Usage: toggle the always-on microphone bridge between paused and active.
+    # Parameters: none.
+    # Return: None.
+    def _handle_pause_bridge_clicked(self) -> None:
+        """Pause or resume microphone listening from the action button."""
+
+        should_pause = self._pause_bridge_button.text() == "Pause Bridge"
+        self._controller.set_bridge_paused(should_pause)
+        self._pause_bridge_button.setText("Resume Bridge" if should_pause else "Pause Bridge")
 
     # Usage: persist the current form values and write the managed PipeWire virtual microphone config file.
     # Parameters: none.

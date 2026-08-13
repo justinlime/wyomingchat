@@ -158,19 +158,6 @@ def test_mic_gain_round_trips_and_clamps() -> None:
     assert out_of_range.mic_gain == 10.0
 
 
-# Usage: verify that the streaming synthesis toggle survives a config round trip.
-# Parameters: none.
-# Return: None.
-def test_streaming_synthesis_round_trips() -> None:
-    """Ensure streaming_synthesis persists and defaults to enabled."""
-
-    assert AppConfig().streaming_synthesis is True
-
-    original = AppConfig()
-    original.streaming_synthesis = False
-    restored = AppConfig.from_dict(original.to_dict())
-    assert restored.streaming_synthesis is False
-
 
 # Usage: verify that the silence timeout persists and is clamped to the supported range.
 # Parameters: none.
@@ -186,3 +173,19 @@ def test_stop_silence_ms_round_trips_and_clamps() -> None:
 
     assert AppConfig.from_dict({"stop_silence_ms": 999999}).stop_silence_ms == 6000
     assert AppConfig.from_dict({"stop_silence_ms": 0}).stop_silence_ms == 500
+
+
+# Usage: verify that the TTS output boost multiplier persists and clamps.
+# Parameters: none.
+# Return: None.
+def test_tts_gain_round_trips_and_clamps() -> None:
+    """Ensure tts_gain persists and is clamped to the 1x-3x range."""
+
+    assert AppConfig().tts_gain == 1.0
+
+    original = AppConfig()
+    original.tts_gain = 2.5
+    assert AppConfig.from_dict(original.to_dict()).tts_gain == 2.5
+
+    assert AppConfig.from_dict({"tts_gain": 99.0}).tts_gain == 3.0
+    assert AppConfig.from_dict({"tts_gain": 0.5}).tts_gain == 1.0

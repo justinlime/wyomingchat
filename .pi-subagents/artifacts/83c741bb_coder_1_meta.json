@@ -1,0 +1,132 @@
+{
+  "runId": "83c741bb",
+  "agent": "coder",
+  "task": "READ-ONLY code review - do NOT modify any files. Repo: /home/justinlime/code/wyomingchat (Python/PySide6 app bridging a mic to Wyoming STT/TTS TCP servers).\n\nINVESTIGATE: The user reports 'speech to text timeouts a lot now' which never happened before. The recent changes added: per-sentence streaming TTS (multiple TextToSpeechSession instances created DURING the STT session), a stop-time tail dispatch (TTS sessions started when the utterance ends), longer silence timeout (2.5s), larger capture buffer (250ms), longer VAD pre-roll (600ms).\n\nRead carefully:\n- src/wyomingchat/clients.py — SpeechToTextSession and WyomingTcpConnection: connect(timeout=10), _connected.wait(timeout=10.0), send/read loops, close()/wait_closed(1.0), thread lifecycle, socket timeouts. Identify every path that can produce a timeout-ish error and whether stale threads/sockets can linger.\n- src/wyomingchat/controller.py — _start_stt_session, _abort_current_activity, _handle_stt_complete, the stop-time tail dispatch in _handle_audio_chunk, and how many TCP connections can be open concurrently per utterance.\n\nAnswer: (1) Enumerate every error string in clients.py that could surface as an 'STT timeout' and the exact conditions that trigger each. (2) Can a previous STT session's writer/reader thread still be blocked (e.g., socket.create_connection blocking up to 10s) when a new session starts, and what happens? (3) Does starting N concurrent TTS sessions while the STT session is still finalizing delay or starve the STT socket in any way? (4) Any resource leak (threads, sockets) that accumulates per utterance and could cause later sessions to time out?\n\nReturn a findings report with file:line references.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/review_stt_timeout.txt\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 56104,
+    "output": 26807,
+    "cacheRead": 880128,
+    "cacheWrite": 0,
+    "cost": 0.0089124392,
+    "turns": 19
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 56104,
+        "output": 26807,
+        "cacheRead": 880128,
+        "cacheWrite": 0,
+        "cost": 0.0089124392,
+        "turns": 19
+      }
+    }
+  ],
+  "durationMs": 245908,
+  "toolCount": 33,
+  "launchContractDigest": "0431f24b771df97fa94f4f298a503d8e417d476873e47a48b08562f7c1c64f3f",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Full findings report written to /tmp/review_stt_timeout.txt answering all 4 questions with file:line references and severity: (1) enumerated 5 STT error strings (clients.py:387, 410, 411, 434-435, 439) plus 3 TTS/voice strings (clients.py:538, 540, 656) and the exact trigger conditions for each; (2) documented the stuck-connect and silent-return races (clients.py:143, 308-316, 399-402, 368-387) showing previous STT threads can stay blocked up to 10s and produce a spurious EBADF 'timeout'; (3) confirmed N concurrent TTS sessions (controller.py:520-531, 593, 636-639) can starve a co-located STT/TTS server past the fixed 10s per-read timeout (clients.py:144, 404); (4) identified per-utterance leaks: TTS sessions dropped without close() in _start_stt_session (controller.py:545-548, HIGH), stale orphaned callbacks (controller.py:549, 729-742, 762-768, MEDIUM), and bounded thread/socket residue after aborts (MEDIUM)."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": ".venv/bin/python -m pytest tests/test_clients.py tests/test_wyoming_protocol.py -q",
+          "result": "passed",
+          "summary": "12 passed; confirms client/protocol unit behavior. Controller/streaming tests could not run in this environment (PySide6 import fails: libglib-2.0.so.0 missing; nix dev shell has no pytest)."
+        }
+      ],
+      "validationOutput": [
+        "Read-only review; no files modified.",
+        "All error paths in clients.py traced to the 10.0 socket timeout (clients.py:143-144) and the 10.0 connect-wait (clients.py:399).",
+        "Race in _read_loop silent-return vs. _write_loop late-connect confirmed by code path analysis (clients.py:399-402 -> 368-387).",
+        "TTS session orphaning at controller.py:545-548 confirmed (no close/wait_closed, unlike controller.py:443-446)."
+      ],
+      "residualRisks": [
+        "Could not execute the controller-level integration tests (PySide6/Qt multimedia deps absent in this review environment), so race behavior is verified by code-path analysis, not runtime reproduction.",
+        "Actual STT/TTS server deployment topology (single process vs. separate) is unknown; starvation mechanism assumes co-location or shared CPU, which matches the default localhost setup.",
+        "No timing instrumentation was available to measure real-world finalize latency vs. the 10s timeout."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No diff; read-only review. Findings report written to /tmp/review_stt_timeout.txt (authoritative output path).",
+      "reviewFindings": [
+        "HIGH: clients.py:144,404 - fixed 10s per-read socket timeout turns any >10s STT server stall (incl. TTS-induced load) into a visible 'STT receive/send failed: timed out'.",
+        "HIGH: controller.py:545-548 - _start_stt_session drops in-flight TTS sessions without close()/wait_closed(); orphaned sockets/threads accumulate across utterances.",
+        "HIGH: controller.py:520-531,593,636-639 - N concurrent TTS sessions run during the STT session incl. the stop-time tail dispatch exactly at finalization; can starve a co-located STT+TTS server past the 10s timeout.",
+        "MEDIUM: clients.py:399-402,368-387 - reader give-up / writer late-connect race yields spurious 'STT send failed: [Errno 9] Bad file descriptor' timeouts with a healthy server.",
+        "MEDIUM: clients.py:143,308-316 - close() cannot interrupt in-progress socket.create_connection; wait_closed(1.0) returns with threads stuck up to 10s; stacks on slow servers.",
+        "MEDIUM: controller.py:549,729-742,762-768 - orphaned TTS callbacks (audio chunks/errors) can run against the new utterance and can abort it.",
+        "LOW: clients.py:345-356 - post-finish timeout silently falls back to partial text, truncating transcripts with no error shown.",
+        "LOW: clients.py:144 - no configurable STT timeout; 10s is hardcoded and per-blocking-op, fragile for long utterances on slow hardware."
+      ],
+      "manualNotes": "Report content is at /tmp/review_stt_timeout.txt. Suggested (not implemented) fixes: close+join prior TTS sessions in _start_stt_session, make the STT read/finalize timeout configurable, gate orphaned TTS callbacks by generation, and optionally cap concurrent streaming TTS connections."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/wyomingchat/.pi-subagents/artifacts/83c741bb_coder_1_transcript.jsonl",
+  "timestamp": 1786608742999
+}
