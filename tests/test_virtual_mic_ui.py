@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 QtWidgets = pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
 
+from PySide6.QtCore import Qt
+
 from wyomingchat import ui as ui_module
 from wyomingchat import controller as controller_module
 from wyomingchat.audio import AudioCaptureStream, AudioDeviceCatalog, MultiOutputPlayer
@@ -109,6 +111,25 @@ def test_pipewire_virtual_mic_form_builds_and_round_trips(tmp_path, qapp) -> Non
     assert config.virtual_microphone.enabled is False
     assert config.virtual_microphone.node_name == "wyoming_voice_bridge_mic"
     assert config.virtual_microphone.cable_device_id is None
+
+    window.close()
+
+
+# Usage: verify the Windows cable form embeds the VB-CABLE download link and installation note.
+# Parameters: tmp_path - pytest fixture providing a temp directory; qapp - module-level Qt app fixture.
+# Return: None.
+def test_cable_virtual_mic_form_shows_download_link(tmp_path, qapp, monkeypatch) -> None:
+    """Ensure the cable form tells the user a cable driver must be downloaded and links to it."""
+
+    monkeypatch.setattr(ui_module, "virtual_mic_mode", lambda: "cable")
+
+    controller, window = build_window(tmp_path)
+
+    assert window._cable_download_link is not None
+    assert window._cable_download_link.openExternalLinks() is True
+    assert "vb-audio.com/Cable/index.htm" in window._cable_download_link.text()
+    assert window._cable_download_link.textFormat() == Qt.RichText
+    assert "must be downloaded and installed" in window._cable_download_note.text()
 
     window.close()
 

@@ -58,6 +58,11 @@ DEFAULT_VIRTUAL_MIC_NODE_NAME = "wyoming_voice_bridge_mic"
 DEFAULT_VIRTUAL_MIC_DESCRIPTION = "Wyoming Voice Bridge Mic"
 DEFAULT_VIRTUAL_MIC_CONFIG_FILE_NAME = "10-wyoming-voice-bridge-virtual-mic.conf"
 
+# Free donationware download page for the virtual audio cable driver the
+# Windows virtual microphone feature depends on. The driver must be installed
+# before the app can route TTS into a cable and expose it as a microphone.
+VB_CABLE_DOWNLOAD_URL = "https://vb-audio.com/Cable/index.htm"
+
 STATE_IDLE = "idle"
 STATE_LISTENING = "listening"
 STATE_TRANSCRIBING = "transcribing"

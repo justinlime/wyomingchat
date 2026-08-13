@@ -40,7 +40,7 @@ from .config import (
     VirtualMicrophoneConfig,
     build_tts_voice_display_label,
 )
-from .constants import APP_NAME, MAX_STOP_SILENCE_MS, MIN_STOP_SILENCE_MS
+from .constants import APP_NAME, MAX_STOP_SILENCE_MS, MIN_STOP_SILENCE_MS, VB_CABLE_DOWNLOAD_URL
 from .controller import BridgeController
 from .platforms import platform_label, virtual_mic_mode
 from .virtual_cable import cable_mic_name_for_output, detect_cable_outputs, output_device_pairs
@@ -92,6 +92,8 @@ class MainWindow(QMainWindow):
         info_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
         info_button.setIconSize(QSize(14, 14))
         info_button.setAutoRaise(True)
+        # Remove the focus/hover border so the icon reads as a plain inline glyph.
+        info_button.setStyleSheet("QToolButton { border: none; background: transparent; }")
         info_button.setCursor(Qt.CursorShape.PointingHandCursor)
         info_button.setToolTip(wrapped_tooltip)
         info_button.clicked.connect(
@@ -115,6 +117,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(4)
 
         label = QLabel(text)
+        # Wrap instead of clipping when the form's label column is narrower than
+        # the text (e.g. wider fonts on Windows can overflow the fixed column).
+        label.setWordWrap(True)
         info_button = self._info_button(tooltip)
 
         layout.addWidget(label)
@@ -129,7 +134,7 @@ class MainWindow(QMainWindow):
         """Add a form row with an inline info icon and hover help on the field."""
 
         layout.addRow(self._option_label(label_text, tooltip), field_widget)
-        field_widget.setToolTip(wrap_tooltip_text(wrap_tooltip_text(tooltip)))
+        field_widget.setToolTip(wrap_tooltip_text(tooltip))
 
     # Usage: create the complete widget tree used by the main window.
     # Parameters: none.
@@ -319,12 +324,6 @@ class MainWindow(QMainWindow):
         tts_boost_layout.addWidget(tts_gain_row, stretch=1)
         layout.addWidget(tts_boost_row)
 
-        hint = QLabel(
-            "Tip: choose your real speakers or headphones here. The virtual microphone target is added automatically when enabled."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-        layout.addWidget(hint)
         return page
 
     # Usage: build the tab containing the microphone noise gate controls.
@@ -399,15 +398,6 @@ class MainWindow(QMainWindow):
         silence_layout.addWidget(self._stop_silence_slider, stretch=1)
         silence_layout.addWidget(self._stop_silence_value_label)
 
-        hint = QLabel(
-            "Increase the gate if quiet background sounds or button taps keep triggering the app. "
-            "If your mic reads low on the header meter while you speak normally, raise the Mic boost. "
-            "Watch the live mic level in the header while the room is quiet, then set the gate slightly above that background level. "
-            "Set 'End utterance after' long enough that natural mid-thought pauses do not split a long reply."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-
         layout.addRow(
             self._option_label(
                 "Start speech above",
@@ -435,7 +425,6 @@ class MainWindow(QMainWindow):
             ),
             silence_row,
         )
-        layout.addRow(hint)
         return page
 
     # Usage: build the tab containing virtual microphone settings for the current platform.
@@ -528,6 +517,33 @@ class MainWindow(QMainWindow):
     def _build_cable_virtual_mic_form(self, layout: QFormLayout) -> None:
         """Create the virtual audio cable routing form used on Windows."""
 
+        # The cable driver is a required external dependency; the user must
+        # download and install it before the virtual microphone can work.
+        self._cable_download_note = QLabel(
+            "The virtual microphone requires a free virtual audio cable driver, "
+            "which must be downloaded and installed before it can be used."
+        )
+        self._cable_download_note.setWordWrap(True)
+
+        self._cable_download_link = QLabel(
+            f'<a href="{VB_CABLE_DOWNLOAD_URL}" style="color: #4a9eff;">'
+            "Download VB-CABLE (free)</a>"
+        )
+        self._cable_download_link.setTextFormat(Qt.TextFormat.RichText)
+        self._cable_download_link.setOpenExternalLinks(True)
+        self._cable_download_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cable_download_link.setToolTip(
+            "Opens the VB-Audio VB-CABLE download page in your browser"
+        )
+
+        cable_note_widget = QWidget()
+        cable_note_layout = QVBoxLayout(cable_note_widget)
+        cable_note_layout.setContentsMargins(0, 0, 0, 0)
+        cable_note_layout.setSpacing(2)
+        cable_note_layout.addWidget(self._cable_download_note)
+        cable_note_layout.addWidget(self._cable_download_link)
+        layout.addRow(cable_note_widget)
+
         self._virtual_mic_enabled_checkbox = QCheckBox("Route synthesized TTS into a virtual audio cable as a microphone")
         self._virtual_cable_combo = QComboBox()
         self._refresh_cables_button = QPushButton("Refresh Cables")
@@ -604,13 +620,14 @@ class MainWindow(QMainWindow):
 
         pane = QTabWidget()
 
-        self._partial_transcript_edit = QPlainTextEdit()
-        self._partial_transcript_edit.setReadOnly(True)
-        pane.addTab(self._partial_transcript_edit, "Partial transcript")
-
-        self._final_transcript_edit = QPlainTextEdit()
-        self._final_transcript_edit.setReadOnly(True)
-        pane.addTab(self._final_transcript_edit, "Final transcript")
+        self._transcript_edit = QPlainTextEdit()
+        self._transcript_edit.setReadOnly(True)
+        # Match the terminal-style log pane: black background with light text.
+        self._transcript_edit.setStyleSheet(
+            "QPlainTextEdit { background-color: #000000; color: #c8c8c8;"
+            " selection-background-color: #264f78; }"
+        )
+        pane.addTab(self._transcript_edit, "Transcript")
 
         self._error_edit = QPlainTextEdit()
         self._error_edit.setReadOnly(True)
@@ -658,7 +675,6 @@ class MainWindow(QMainWindow):
         self._controller.state_changed.connect(self._handle_state_changed)
         self._controller.status_changed.connect(self._handle_status_changed)
         self._controller.partial_transcript_changed.connect(self._handle_partial_transcript_changed)
-        self._controller.final_transcript_changed.connect(self._handle_final_transcript_changed)
         self._controller.error_changed.connect(self._handle_error_changed)
         self._controller.monitoring_changed.connect(self._handle_monitoring_changed)
         self._controller.virtual_microphone_configured.connect(self._handle_virtual_microphone_configured)
@@ -703,7 +719,7 @@ class MainWindow(QMainWindow):
             self._virtual_mic_status_label.setText(
                 "Virtual microphone: not supported on this platform"
             )
-        self._final_transcript_edit.setPlainText(config.last_transcript)
+        self._transcript_edit.setPlainText(config.last_transcript)
         self._refresh_device_widgets()
 
     # Usage: populate the virtual audio cable selector with detected cables and a manual fallback.
@@ -939,7 +955,7 @@ class MainWindow(QMainWindow):
                 description=pipewire_description,
                 cable_device_id=cable_device_id,
             ),
-            last_transcript=self._final_transcript_edit.toPlainText(),
+            last_transcript=self._transcript_edit.toPlainText(),
         )
 
     # Usage: save the current form values to disk and update the controller's active configuration.
@@ -1100,21 +1116,13 @@ class MainWindow(QMainWindow):
 
         self._virtual_mic_status_label.setText(f"Virtual microphone: configured at {config_path}")
 
-    # Usage: display streaming transcript updates in the partial transcript text box.
-    # Parameters: text - the current transcript-chunk aggregation to display.
+    # Usage: display streaming transcript updates in the transcript text box.
+    # Parameters: text - the current transcript text to display (partial while streaming, final once complete).
     # Return: None.
     def _handle_partial_transcript_changed(self, text: str) -> None:
-        """Display the latest streaming transcript in the partial transcript pane."""
+        """Display the latest transcript in the transcript pane."""
 
-        self._partial_transcript_edit.setPlainText(text)
-
-    # Usage: display the final transcript in the dedicated final transcript text box.
-    # Parameters: text - the final transcript returned by the STT service.
-    # Return: None.
-    def _handle_final_transcript_changed(self, text: str) -> None:
-        """Display the final transcript in the final transcript pane."""
-
-        self._final_transcript_edit.setPlainText(text)
+        self._transcript_edit.setPlainText(text)
 
     # Usage: append the latest controller error to the scrollable log with a timestamp.
     # Parameters: text - the error message to log; empty messages clear nothing and are ignored.
